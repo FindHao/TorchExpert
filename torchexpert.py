@@ -7,6 +7,14 @@ import torch
 
 
 class TorchExpert:
+    """
+    This class is used to profile the model and do the analysis.
+    Attribute:
+        prof: the profiler reference
+        events_raw: the raw events from the profiler.
+        profiler_config: the config for profiling
+    """
+
     def __init__(self):
         self.prof = None
         self.events_raw = []
@@ -25,11 +33,20 @@ class TorchExpert:
             "nwarmup": nwarmup
         }
 
+
     def set_profile(self, prof):
+        """
+        If the profiling happens outside this class, you can set the profile reference here.
+        """
         self.prof = prof
+        # @Yueming Hao: this API will be deprecated in the future
         self.events_raw = prof.profiler.kineto_results.events()
 
     def profile(self, func, *args, **kwargs):
+        """
+        This function is used to profile the model. It is not necessary to call this function. 
+        You can directly use the profiler outside this class.
+        """
         nwarmup = int(self.profiler_config["nwarmup"])
         with profiler.profile(
             schedule=profiler.schedule(wait=0, warmup=nwarmup, active=1),
@@ -45,6 +62,8 @@ class TorchExpert:
                 func(*args, **kwargs)
                 # Need to sync here to match run_one_step()'s timed run.
                 torch.cuda.synchronize()
+                # The last call of prof.step() will clean the profile, 
+                # so ignore it for the last iteration.
                 if _i != nwarmup:
                     prof.step()
         self.prof = prof
@@ -53,6 +72,9 @@ class TorchExpert:
         self.events_raw = prof.profiler.kineto_results.events()
 
     def analyze(self):
+        """
+        This function is used to analyze the profiling result. Will be changed to add more features in the future.
+        """
         slimevents = []
         end_us = 0
         start_us = self.events_raw[0].start_us() if len(self.events_raw) else 0
@@ -70,9 +92,9 @@ class TorchExpert:
             sum_gpu_active += slimevent.end_us - slimevent.start_us
             # for event in slimevent.include_events:
             #     print(event.name())
-        print("GPU active time:", sum_gpu_active/1e3, "ms")
+        print("GPU active time:", sum_gpu_active / 1e3, "ms")
         if start_us != 0:
             print("GPU active time ratio: %.2f%%" %
-                  (sum_gpu_active*100/(end_us-start_us)))
+                  (sum_gpu_active * 100 / (end_us - start_us)))
         else:
             print("Missing total time")
