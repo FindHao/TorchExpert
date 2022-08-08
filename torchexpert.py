@@ -1,6 +1,7 @@
 from asyncio import events
 from torch import profiler
 from torch._C._autograd import _ProfilerEvent, DeviceType
+from torch.profiler._pattern_matcher import eventTreeBFS
 from common_func import *
 from profile_event import ProfileEventSlim
 import torch
@@ -18,6 +19,7 @@ class TorchExpert:
     def __init__(self):
         self.prof = None
         self.events_raw = []
+        self.event_tree_roots = []
         self.profiler_config = {
             "activities": [profiler.ProfilerActivity.CUDA, profiler.ProfilerActivity.CPU],
             "profile_detailed": True,
@@ -39,8 +41,10 @@ class TorchExpert:
         If the profiling happens outside this class, you can set the profile reference here.
         """
         self.prof = prof
-        # @Yueming Hao: this API will be deprecated in the future
-        self.events_raw = prof.profiler.kineto_results.events()
+        # @Yueming Hao: this API requires PyTorch >= August 1st, 2022
+        self.event_tree_roots = prof.profiler.kineto_results.experimental_event_tree()
+        # @Yueming Hao: this API requires PyTorch >= August 8st, 2022
+        self.events_raw = eventTreeBFS(self.event_tree_roots)
 
     def profile(self, func, *args, **kwargs):
         """
