@@ -41,8 +41,10 @@ class TorchExpert:
         If the profiling happens outside this class, you can set the profile reference here.
         """
         self.prof = prof
-        self.event_tree_roots = prof.profiler.kineto_results.experimental_event_tree()
-        self.events_raw = list(eventTreeBFS(self.event_tree_roots))
+        # self.event_tree_roots = prof.profiler.kineto_results.experimental_event_tree()
+        # self.events_raw = list(eventTreeBFS(self.event_tree_roots))
+        self.events_raw = prof.profiler.kineto_results.events()
+
 
     def profile(self, func, *args, **kwargs):
         """
@@ -71,8 +73,9 @@ class TorchExpert:
         self.prof = prof
         # print(prof.key_averages(group_by_input_shape=True).table(
         #     sort_by="cpu_time_total", row_limit=30))
-        self.event_tree_roots = prof.profiler.kineto_results.experimental_event_tree()
-        self.events_raw = list(eventTreeBFS(self.event_tree_roots))
+        # self.event_tree_roots = prof.profiler.kineto_results.experimental_event_tree()
+        # self.events_raw = list(eventTreeBFS(self.event_tree_roots))
+        self.events_raw = prof.profiler.kineto_results.events()
 
     def analyze(self):
         """
