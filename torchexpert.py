@@ -1,8 +1,8 @@
 from asyncio import events
 from torch import profiler
-from torch._C._autograd import _ProfilerEvent, DeviceType
+from torch._C._autograd import _ProfilerEvent, _EventType
 from torch.profiler._pattern_matcher import eventTreeBFS
-from common_func import *
+from common_func import merge_interval
 from profile_event import ProfileEventSlim
 import torch
 
@@ -79,24 +79,24 @@ class TorchExpert:
         This function is used to analyze the profiling result. Will be changed to add more features in the future.
         """
         slimevents = []
-        end_us = 0
-        start_us = self.events_raw[0].start_us() if len(self.events_raw) else 0
+        end_ns = 0
+        start_ns = self.events_raw[0].start_time_ns if len(self.events_raw) else 0
         for event in self.events_raw:
-            if event.device_type() == DeviceType.CUDA:
+            if event.tag == _EventType.Kineto:
                 slimevents.append(ProfileEventSlim(event))
                 # @Yueming Hao: may need to change it in the future
-                end_us = max(end_us, event.start_us() + event.duration_us())
-                start_us = min(start_us, event.start_us())
+                end_ns = max(end_ns, event.end_time_ns)
+                start_ns = min(start_ns, event.start_time_ns)
         merged_slimevents = merge_interval(slimevents)
         sum_gpu_active = 0
         for slimevent in merged_slimevents:
             # print(slimevent.start_us, slimevent.end_us)
-            sum_gpu_active += slimevent.end_us - slimevent.start_us
+            sum_gpu_active += slimevent.end_ns - slimevent.start_ns
             # for event in slimevent.include_events:
             #     print(event.name())
-        print("GPU active time:", sum_gpu_active / 1e3, "ms")
-        if start_us != 0:
+        print("GPU active time:", sum_gpu_active / 1e6, "ms")
+        if start_ns != 0:
             print("GPU active time ratio: %.2f%%" %
-                  (sum_gpu_active * 100 / (end_us - start_us)))
+                  (sum_gpu_active * 100 / (end_ns - start_ns)))
         else:
             print("Missing total time")

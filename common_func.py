@@ -1,6 +1,6 @@
-
-
-def merge_interval(intervals):
+from profile_event import ProfileEventSlim
+from typing import List
+def merge_interval(intervals) -> 'list[ProfileEventSlim]':
     """
     Merge intervals that are overlapped.
     Args:
