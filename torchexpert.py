@@ -14,6 +14,7 @@ class TorchExpert:
         prof: the profiler reference
         events_raw: the raw events from the profiler.
         profiler_config: the config for profiling
+    TorchExpert requires PyTorch >= August 8st, 2022
     """
 
     def __init__(self):
@@ -35,16 +36,13 @@ class TorchExpert:
             "nwarmup": nwarmup
         }
 
-
     def set_profile(self, prof):
         """
         If the profiling happens outside this class, you can set the profile reference here.
         """
         self.prof = prof
-        # @Yueming Hao: this API requires PyTorch >= August 1st, 2022
         self.event_tree_roots = prof.profiler.kineto_results.experimental_event_tree()
-        # @Yueming Hao: this API requires PyTorch >= August 8st, 2022
-        self.events_raw = eventTreeBFS(self.event_tree_roots)
+        self.events_raw = list(eventTreeBFS(self.event_tree_roots))
 
     def profile(self, func, *args, **kwargs):
         """
@@ -66,14 +64,15 @@ class TorchExpert:
                 func(*args, **kwargs)
                 # Need to sync here to match run_one_step()'s timed run.
                 torch.cuda.synchronize()
-                # The last call of prof.step() will clean the profile, 
-                # so ignore it for the last iteration.
+                # The last call of prof.step() will clean the profile,
+                # so ignore it in the last iteration.
                 if _i != nwarmup:
                     prof.step()
         self.prof = prof
-        print(prof.key_averages(group_by_input_shape=True).table(
-            sort_by="cpu_time_total", row_limit=30))
-        self.events_raw = prof.profiler.kineto_results.events()
+        # print(prof.key_averages(group_by_input_shape=True).table(
+        #     sort_by="cpu_time_total", row_limit=30))
+        self.event_tree_roots = prof.profiler.kineto_results.experimental_event_tree()
+        self.events_raw = list(eventTreeBFS(self.event_tree_roots))
 
     def analyze(self):
         """
@@ -86,8 +85,7 @@ class TorchExpert:
             if event.device_type() == DeviceType.CUDA:
                 slimevents.append(ProfileEventSlim(event))
                 # @Yueming Hao: may need to change it in the future
-                end_us = max(
-                    end_us, event.start_us() + event.duration_us())
+                end_us = max(end_us, event.start_us() + event.duration_us())
                 start_us = min(start_us, event.start_us())
         merged_slimevents = merge_interval(slimevents)
         sum_gpu_active = 0
