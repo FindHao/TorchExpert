@@ -1,3 +1,4 @@
+from torch._C._autograd import _ProfilerEvent
 class ProfileEventSlim:
     """
     A simplified version of event class. 
@@ -7,8 +8,8 @@ class ProfileEventSlim:
         end_us: end time of the event in microseconds(us)
         include_events: a list of raw events that have overlaps
     """
-    def __init__(self, event):
-        self.duration_us = event.duration_us()
-        self.start_us = event.start_us()
-        self.end_us = event.duration_us() + event.start_us()
+    def __init__(self, event:_ProfilerEvent):
+        self.duration_time_ns = event.duration_time_ns
+        self.start_time_ns = event.start_time_ns
+        self.end_time_ns = event.end_time_ns
         self.include_events = [event]

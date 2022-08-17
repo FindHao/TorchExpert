@@ -1,5 +1,6 @@
 
 
+
 def merge_interval(intervals):
     """
     Merge intervals that are overlapped.
@@ -10,13 +11,13 @@ def merge_interval(intervals):
     """
     if not intervals:
         return []
-    intervals.sort(key=lambda x: x.start_us)
+    intervals.sort(key=lambda x: x.start_time_ns)
     res = []
     res.append(intervals[0])
     for i in range(1, len(intervals)):
         last = res[-1]
-        if intervals[i].start_us <= last.end_us:
-            last.end_us = max(last.end_us, intervals[i].end_us)
+        if intervals[i].start_time_ns <= last.end_time_ns:
+            last.end_time_ns = max(last.end_time_ns, intervals[i].end_time_ns)
             last.include_events.extend(intervals[i].include_events)
         else:
             res.append(intervals[i])
