@@ -1,6 +1,7 @@
 from asyncio import events
 from torch import profiler
-from torch._C._autograd import _ProfilerEvent, DeviceType, _EventType
+from torch._C._autograd import DeviceType
+from torch._C._profiler import _ProfilerEvent, _EventType
 from torch.profiler._pattern_matcher import eventTreeBFS
 from common_func import *
 from profile_event import ProfileEventSlim
@@ -10,7 +11,7 @@ import torch
 KINETO_EVENT_ON_CPU = [
     "cudaDeviceGetStreamPriorityRange",
     "cudaStreamGetPriority",
-    "cudaDeviceSynchronize",
+    # "cudaDeviceSynchronize",
     "cudaStreamIsCapturing",
     "cudaFuncGetAttributes",
     "cudaStreamWaitEvent",
@@ -97,23 +98,43 @@ class TorchExpert:
         end_time_ns = 0
         start_time_ns = self.events_raw[0].start_time_ns if len(
             self.events_raw) else 0
+        memcpy_time = 0
         for event in self.events_raw:
             if event.tag == _EventType.Kineto:
+                # @Yueming: It is a workaround for missing device attribution in _ProfilerEvent.
                 if event.name().strip() in KINETO_EVENT_ON_CPU:
                     continue
+                if event.name().strip().startswith("cudaMemcpy"):
+                    memcpy_time += event.duration_time_ns
+                if event.parent.name().strip() not in ['cudaLaunchKernel', 'cudaMemcpyAsync']:
+                    print("TorcheExpert-> Unexpected kernel ",
+                          event.name().strip())
                 slimevents.append(ProfileEventSlim(event))
                 end_time_ns = max(end_time_ns, event.end_time_ns)
                 start_time_ns = min(start_time_ns, event.start_time_ns)
         merged_slimevents = merge_interval(slimevents)
-        sum_gpu_active = 0
+        sum_gpu_busy = 0
         for slimevent in merged_slimevents:
             # print(slimevent.start_us, slimevent.end_us)
-            sum_gpu_active += slimevent.end_time_ns - slimevent.start_time_ns
+            sum_gpu_busy += slimevent.end_time_ns - slimevent.start_time_ns
             # for event in slimevent.include_events:
             #     print(event.name())
-        print("GPU active time:", sum_gpu_active / 1e3, "ms")
-        if start_time_ns != 0:
-            print("GPU active time ratio: %.2f%%" %
-                  (sum_gpu_active * 100 / (end_time_ns - start_time_ns)))
-        else:
-            print("Missing total time")
+        if start_time_ns == 0:
+            print("Error: No events found.")
+            return
+        app_duration = end_time_ns - start_time_ns
+        sum_gpu_active = app_duration - memcpy_time
+        print("{:<25} {:>10}".format(
+            "GPU memcpy time", "%.2fms" % (memcpy_time / 1e6)))
+        print("{:<25} {:>10}".format(
+            "GPU active time", "%.2fms" % (sum_gpu_active / 1e6)))
+        print("{:<25} {:>10}".format(
+            "GPU busy time", "%.2fms" % (sum_gpu_busy / 1e6)))
+        print("{:<25} {:>10}".format(
+            "GPU total time:", "%.2fms" % (app_duration / 1e6)))
+        print("{:<25} {:>10}".format("GPU memcpy time ratio:", "%.2f%%" %
+                (memcpy_time * 100 / app_duration)))
+        print("{:<25} {:>10}".format("GPU active time ratio:", "%.2f%%" %
+                (sum_gpu_active * 100 / app_duration)))
+        print("{:<25} {:>10}".format("GPU busy time ratio:", "%.2f%%" %
+              (sum_gpu_busy * 100 / app_duration)))

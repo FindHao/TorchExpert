@@ -1,4 +1,4 @@
-from torch._C._autograd import _ProfilerEvent
+from torch._C._profiler import _ProfilerEvent
 class ProfileEventSlim:
     """
     A simplified version of event class. 
