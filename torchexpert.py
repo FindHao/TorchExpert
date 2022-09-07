@@ -90,6 +90,26 @@ class TorchExpert:
         self.events_raw = list(eventTreeBFS(self.event_tree_roots))
         self.events_kineto = prof.profiler.kineto_results.events()
 
+    def get_all_idleness(self, events):
+        """
+        This function is used to get the idleness of the events.
+        Args:
+            events: a sorted list of events by start time
+        Returns:
+            a list of idleness event
+        """
+        if len(events) == 0:
+            return []
+        idle_events = []
+        last_end_time_ns = events[0].end_time_ns
+        for i in range(1, len(events)):
+            duration = events[i].start_time_ns - last_end_time_ns
+            # ignore the idleness less than 0.01ms
+            if duration > 0.01 * 1e6:
+                idle_events.append(ProfileEventSlim(
+                    event=None, duration_time_ns=events[i].start_time_ns - last_end_time_ns, start_time_ns=last_end_time_ns, end_time_ns=events[i].start_time_ns))
+        return idle_events
+
     def analyze(self):
         """
         This function is used to analyze the profiling result. Will be changed to add more features in the future.
@@ -113,6 +133,10 @@ class TorchExpert:
                 end_time_ns = max(end_time_ns, event.end_time_ns)
                 start_time_ns = min(start_time_ns, event.start_time_ns)
         merged_slimevents = merge_interval(slimevents)
+        # get all idleness
+        # @TODO: the results are not correct
+        idle_events = self.get_all_idleness(merged_slimevents)
+
         sum_gpu_busy = 0
         for slimevent in merged_slimevents:
             # print(slimevent.start_us, slimevent.end_us)
@@ -133,8 +157,8 @@ class TorchExpert:
         print("{:<25} {:>10}".format(
             "GPU total time:", "%.2fms" % (app_duration / 1e6)))
         print("{:<25} {:>10}".format("GPU memcpy time ratio:", "%.2f%%" %
-                (memcpy_time * 100 / app_duration)))
+                                     (memcpy_time * 100 / app_duration)))
         print("{:<25} {:>10}".format("GPU active time ratio:", "%.2f%%" %
-                (sum_gpu_active * 100 / app_duration)))
+                                     (sum_gpu_active * 100 / app_duration)))
         print("{:<25} {:>10}".format("GPU busy time ratio:", "%.2f%%" %
               (sum_gpu_busy * 100 / app_duration)))
