@@ -1,8 +1,9 @@
 from asyncio import events
+from sys import setprofile
 from torch import profiler
 from torch._C._autograd import DeviceType
-from torch._C._profiler import _ProfilerEvent, _EventType
-from torch.profiler._pattern_matcher import eventTreeBFS
+# from torch._C._profiler import _ProfilerEvent, _EventType
+# from torch.profiler._pattern_matcher import eventTreeBFS
 from common_func import *
 from profile_event import ProfileEventSlim
 import torch
@@ -55,9 +56,11 @@ class TorchExpert:
         If the profiling happens outside this class, you can set the profile reference here.
         """
         self.prof = prof
-        self.event_tree_roots = prof.profiler.kineto_results.experimental_event_tree()
-        self.events_raw = list(eventTreeBFS(self.event_tree_roots))
+        # _ProfileEvent can't provide enough information, so we need to revert back to kineto events
+        # self.event_tree_roots = prof.profiler.kineto_results.experimental_event_tree()
+        # self.events_raw = list(eventTreeBFS(self.event_tree_roots))
         self.events_kineto = prof.profiler.kineto_results.events()
+        self.events_raw = self.events_kineto
 
     def profile(self, func, *args, **kwargs):
         """
@@ -83,12 +86,9 @@ class TorchExpert:
                 # so ignore it in the last iteration.
                 if _i != nwarmup:
                     prof.step()
-        self.prof = prof
         # print(prof.key_averages(group_by_input_shape=True).table(
         #     sort_by="cpu_time_total", row_limit=30))
-        self.event_tree_roots = prof.profiler.kineto_results.experimental_event_tree()
-        self.events_raw = list(eventTreeBFS(self.event_tree_roots))
-        self.events_kineto = prof.profiler.kineto_results.events()
+        self.set_profile(prof)
 
     def get_all_idleness(self, events):
         """
@@ -116,22 +116,31 @@ class TorchExpert:
         """
         slimevents = []
         end_time_ns = 0
-        start_time_ns = self.events_raw[0].start_time_ns if len(
+        start_time_ns = self.events_raw[0].start_us() * 1e3 if len(
             self.events_raw) else 0
         memcpy_time = 0
         for event in self.events_raw:
-            if event.tag == _EventType.Kineto:
-                # @Yueming: It is a workaround for missing device attribution in _ProfilerEvent.
-                if event.name().strip() in KINETO_EVENT_ON_CPU:
-                    continue
-                if event.name().strip().startswith("cudaMemcpy"):
-                    memcpy_time += event.duration_time_ns
-                if event.parent.name().strip() not in ['cudaLaunchKernel', 'cudaMemcpyAsync']:
-                    print("TorcheExpert-> Unexpected kernel ",
-                          event.name().strip())
+            # if event.tag == _EventType.Kineto:
+            #     # @Yueming: It is a workaround for missing device attribution in _ProfilerEvent.
+            #     if event.name().strip() in KINETO_EVENT_ON_CPU:
+            #         continue
+            #     if event.name().strip().startswith("cudaMemcpy"):
+            #         memcpy_time += event.duration_time_ns
+            #     if event.parent.name().strip() not in ['cudaLaunchKernel', 'cudaMemcpyAsync']:
+            #         print("TorcheExpert-> Unexpected kernel ",
+            #               event.name().strip())
+            #     slimevents.append(ProfileEventSlim(event))
+            #     end_time_ns = max(end_time_ns, event.end_time_ns)
+            #     start_time_ns = min(start_time_ns, event.start_time_ns)
+            if event.device_type() == DeviceType.CUDA:
                 slimevents.append(ProfileEventSlim(event))
-                end_time_ns = max(end_time_ns, event.end_time_ns)
-                start_time_ns = min(start_time_ns, event.start_time_ns)
+                # @Future: Update to _ProfilerEvent. The kineto event only has us resolution.
+                end_time_ns = max(
+                    end_time_ns, (event.start_us() + event.duration_us())*1e3)
+                start_time_ns = min(start_time_ns, event.start_us() * 1e3)
+                if event.name().strip().startswith("Memcpy"):
+                    memcpy_time += event.duration_us() * 1e3
+
         merged_slimevents = merge_interval(slimevents)
         # get all idleness
         # @TODO: the results are not correct
