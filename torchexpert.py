@@ -7,7 +7,8 @@ from torch._C._autograd import DeviceType
 from common_func import *
 from profile_event import ProfileEventSlim
 import torch
-
+import json
+from analysis_result import AnalysisResult
 
 KINETO_EVENT_ON_CPU = [
     "cudaDeviceGetStreamPriorityRange",
@@ -42,6 +43,8 @@ class TorchExpert:
             "profile_folder": "./logs/",
             "nwarmup": 3
         }
+        self.json_trace = None
+        self.analysis_result = None
 
     def set_profile_config(self, activity_groups, profile_detailed, profile_folder, nwarmup):
         self.profiler_config = {
@@ -145,6 +148,8 @@ class TorchExpert:
         # get all idleness
         # @TODO: the results are not correct
         idle_events = self.get_all_idleness(merged_slimevents)
+        # get all kernels' occupancy
+        self.load_json(get_latest_file(self.profiler_config["profile_folder"]))
 
         sum_gpu_busy = 0
         for slimevent in merged_slimevents:
@@ -156,18 +161,17 @@ class TorchExpert:
             print("Error: No events found.")
             return
         app_duration = end_time_ns - start_time_ns
-        sum_gpu_active = app_duration - memcpy_time
-        print("{:<25} {:>10}".format(
-            "GPU memcpy time", "%.2fms" % (memcpy_time / 1e6)))
-        print("{:<25} {:>10}".format(
-            "GPU active time", "%.2fms" % (sum_gpu_active / 1e6)))
-        print("{:<25} {:>10}".format(
-            "GPU busy time", "%.2fms" % (sum_gpu_busy / 1e6)))
-        print("{:<25} {:>10}".format(
-            "GPU total time:", "%.2fms" % (app_duration / 1e6)))
-        print("{:<25} {:>10}".format("GPU memcpy time ratio:", "%.2f%%" %
-                                     (memcpy_time * 100 / app_duration)))
-        print("{:<25} {:>10}".format("GPU active time ratio:", "%.2f%%" %
-                                     (sum_gpu_active * 100 / app_duration)))
-        print("{:<25} {:>10}".format("GPU busy time ratio:", "%.2f%%" %
-              (sum_gpu_busy * 100 / app_duration)))
+        self.analysis_result = AnalysisResult(app_duration=app_duration, memcpy_time=memcpy_time, gpu_busy_time=sum_gpu_busy,)
+        self.analysis_result.print_as_str()
+
+    def load_json(self, json_file):
+        """
+        This function is used to load the profiling result from a json file.
+        Args:
+            json_file: the path of the json file
+        """
+        if json_file is None:
+            print("Error: No json file found.")
+            return
+        with open(json_file, "r") as f:
+            self.json_trace = json.load(f)

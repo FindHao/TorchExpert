@@ -1,4 +1,5 @@
-
+import glob
+import os
 
 
 def merge_interval(intervals):
@@ -22,3 +23,17 @@ def merge_interval(intervals):
         else:
             res.append(intervals[i])
     return res
+
+def get_latest_file(path):
+    """
+    Get the latest file in a directory.
+    Args:
+        path: the directory path
+    Returns:
+        the latest file path
+    """
+    list_of_files = glob.glob(path + '/*')
+    if not list_of_files:
+        return None
+    latest_file = max(list_of_files, key=os.path.getctime)
+    return latest_file
