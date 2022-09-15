@@ -5,10 +5,11 @@ from torch._C._autograd import DeviceType
 # from torch._C._profiler import _ProfilerEvent, _EventType
 # from torch.profiler._pattern_matcher import eventTreeBFS
 from common_func import *
-from profile_event import ProfileEventSlim
+from profile_event import ProfileEventSlim, TraceEvent
 import torch
 import json
 from analysis_result import AnalysisResult
+import numpy as np
 
 KINETO_EVENT_ON_CPU = [
     "cudaDeviceGetStreamPriorityRange",
@@ -29,6 +30,8 @@ class TorchExpert:
         prof: the profiler reference
         events_raw: the raw events from the profiler.
         profiler_config: the config for profiling
+        json_trace: the json file of the profiling result
+        cuda_kernels: cuda kernels, ProfilerEventSlim
     TorchExpert requires PyTorch >= August 8st, 2022
     """
 
@@ -45,6 +48,7 @@ class TorchExpert:
         }
         self.json_trace = None
         self.analysis_result = None
+        self.cuda_kernels = []
 
     def set_profile_config(self, activity_groups, profile_detailed, profile_folder, nwarmup):
         self.profiler_config = {
@@ -143,14 +147,15 @@ class TorchExpert:
                 start_time_ns = min(start_time_ns, event.start_us() * 1e3)
                 if event.name().strip().startswith("Memcpy"):
                     memcpy_time += event.duration_us() * 1e3
-
+        self.cuda_kernels = slimevents
         merged_slimevents = merge_interval(slimevents)
         # get all idleness
         # @TODO: the results are not correct
         idle_events = self.get_all_idleness(merged_slimevents)
         # get all kernels' occupancy
         self.load_json(get_latest_file(self.profiler_config["profile_folder"]))
-
+        
+        print("occupancy: ", self.get_avg_kernel_occupancy())
         sum_gpu_busy = 0
         for slimevent in merged_slimevents:
             # print(slimevent.start_us, slimevent.end_us)
@@ -175,3 +180,19 @@ class TorchExpert:
             return
         with open(json_file, "r") as f:
             self.json_trace = json.load(f)
+    def get_avg_kernel_occupancy(self):
+        """
+        This function is used to get the occupancy of all kernels in the trace file.
+        Returns:
+            a dictionary of kernel occupancy
+        """
+        kernel_occupancy = []
+        cuda_kernels = [_ for _ in self.events_raw if _.device_type() == DeviceType.CUDA and not _.name().strip().startswith("Memcpy")]
+        kernel_occupancies = []
+        for event in self.json_trace['traceEvents']:
+            if event.get('cat', '') == 'kernel':
+                # FIXME: some kernels' occupancy is 0
+                kernel_occupancies.append(event['args']['est. achieved occupancy %'])
+        print("kernel_occupancies: ", kernel_occupancies)
+        avg_occupancy = np.mean(kernel_occupancies)
+        return avg_occupancy
