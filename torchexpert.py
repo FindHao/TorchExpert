@@ -1,10 +1,26 @@
 from asyncio import events
+from sys import setprofile
 from torch import profiler
-from torch._C._autograd import _ProfilerEvent, DeviceType
-from torch.profiler._pattern_matcher import eventTreeBFS
+from torch._C._autograd import DeviceType
+# from torch._C._profiler import _ProfilerEvent, _EventType
+# from torch.profiler._pattern_matcher import eventTreeBFS
 from common_func import *
-from profile_event import ProfileEventSlim
+from profile_event import ProfileEventSlim, TraceEvent
 import torch
+import json
+from analysis_result import AnalysisResult
+import numpy as np
+
+KINETO_EVENT_ON_CPU = [
+    "cudaDeviceGetStreamPriorityRange",
+    "cudaStreamGetPriority",
+    # "cudaDeviceSynchronize",
+    "cudaStreamIsCapturing",
+    "cudaFuncGetAttributes",
+    "cudaStreamWaitEvent",
+    "cudaLaunchKernel",
+    "cudaFuncSetAttribute",
+]
 
 
 class TorchExpert:
@@ -14,6 +30,8 @@ class TorchExpert:
         prof: the profiler reference
         events_raw: the raw events from the profiler.
         profiler_config: the config for profiling
+        json_trace: the json file of the profiling result
+        cuda_kernels: cuda kernels, ProfilerEventSlim
     TorchExpert requires PyTorch >= August 8st, 2022
     """
 
@@ -21,12 +39,16 @@ class TorchExpert:
         self.prof = None
         self.events_raw = []
         self.event_tree_roots = []
+        self.events_kineto = []
         self.profiler_config = {
             "activities": [profiler.ProfilerActivity.CUDA, profiler.ProfilerActivity.CPU],
             "profile_detailed": True,
             "profile_folder": "./logs/",
             "nwarmup": 3
         }
+        self.json_trace = None
+        self.analysis_result = None
+        self.cuda_kernels = []
 
     def set_profile_config(self, activity_groups, profile_detailed, profile_folder, nwarmup):
         self.profiler_config = {
@@ -41,10 +63,11 @@ class TorchExpert:
         If the profiling happens outside this class, you can set the profile reference here.
         """
         self.prof = prof
+        # _ProfileEvent can't provide enough information, so we need to revert back to kineto events
         # self.event_tree_roots = prof.profiler.kineto_results.experimental_event_tree()
         # self.events_raw = list(eventTreeBFS(self.event_tree_roots))
-        self.events_raw = prof.profiler.kineto_results.events()
-
+        self.events_kineto = prof.profiler.kineto_results.events()
+        self.events_raw = self.events_kineto
 
     def profile(self, func, *args, **kwargs):
         """
@@ -70,36 +93,106 @@ class TorchExpert:
                 # so ignore it in the last iteration.
                 if _i != nwarmup:
                     prof.step()
-        self.prof = prof
         # print(prof.key_averages(group_by_input_shape=True).table(
         #     sort_by="cpu_time_total", row_limit=30))
-        # self.event_tree_roots = prof.profiler.kineto_results.experimental_event_tree()
-        # self.events_raw = list(eventTreeBFS(self.event_tree_roots))
-        self.events_raw = prof.profiler.kineto_results.events()
+        self.set_profile(prof)
+
+    def get_all_idleness(self, events):
+        """
+        This function is used to get the idleness of the events.
+        Args:
+            events: a sorted list of events by start time
+        Returns:
+            a list of idleness event
+        """
+        if len(events) == 0:
+            return []
+        idle_events = []
+        last_end_time_ns = events[0].end_time_ns
+        for i in range(1, len(events)):
+            duration = events[i].start_time_ns - last_end_time_ns
+            # ignore the idleness less than 0.01ms
+            if duration > 0.01 * 1e6:
+                idle_events.append(ProfileEventSlim(
+                    event=None, duration_time_ns=events[i].start_time_ns - last_end_time_ns, start_time_ns=last_end_time_ns, end_time_ns=events[i].start_time_ns))
+        return idle_events
 
     def analyze(self):
         """
         This function is used to analyze the profiling result. Will be changed to add more features in the future.
         """
         slimevents = []
-        end_us = 0
-        start_us = self.events_raw[0].start_us() if len(self.events_raw) else 0
+        end_time_ns = 0
+        start_time_ns = self.events_raw[0].start_us() * 1e3 if len(
+            self.events_raw) else 0
+        memcpy_time = 0
         for event in self.events_raw:
+            # if event.tag == _EventType.Kineto:
+            #     # @Yueming: It is a workaround for missing device attribution in _ProfilerEvent.
+            #     if event.name().strip() in KINETO_EVENT_ON_CPU:
+            #         continue
+            #     if event.name().strip().startswith("cudaMemcpy"):
+            #         memcpy_time += event.duration_time_ns
+            #     if event.parent.name().strip() not in ['cudaLaunchKernel', 'cudaMemcpyAsync']:
+            #         print("TorcheExpert-> Unexpected kernel ",
+            #               event.name().strip())
+            #     slimevents.append(ProfileEventSlim(event))
+            #     end_time_ns = max(end_time_ns, event.end_time_ns)
+            #     start_time_ns = min(start_time_ns, event.start_time_ns)
             if event.device_type() == DeviceType.CUDA:
                 slimevents.append(ProfileEventSlim(event))
-                # @Yueming Hao: may need to change it in the future
-                end_us = max(end_us, event.start_us() + event.duration_us())
-                start_us = min(start_us, event.start_us())
+                # @Future: Update to _ProfilerEvent. The kineto event only has us resolution.
+                end_time_ns = max(
+                    end_time_ns, (event.start_us() + event.duration_us())*1e3)
+                start_time_ns = min(start_time_ns, event.start_us() * 1e3)
+                if event.name().strip().startswith("Memcpy"):
+                    memcpy_time += event.duration_us() * 1e3
+        self.cuda_kernels = slimevents
         merged_slimevents = merge_interval(slimevents)
-        sum_gpu_active = 0
+        # get all idleness
+        # @TODO: the results are not correct
+        idle_events = self.get_all_idleness(merged_slimevents)
+        # get all kernels' occupancy
+        self.load_json(get_latest_file(self.profiler_config["profile_folder"]))
+        
+        print("occupancy: ", self.get_avg_kernel_occupancy())
+        sum_gpu_busy = 0
         for slimevent in merged_slimevents:
             # print(slimevent.start_us, slimevent.end_us)
-            sum_gpu_active += slimevent.end_us - slimevent.start_us
+            sum_gpu_busy += slimevent.end_time_ns - slimevent.start_time_ns
             # for event in slimevent.include_events:
             #     print(event.name())
-        print("GPU active time:", sum_gpu_active / 1e3, "ms")
-        if start_us != 0:
-            print("GPU active time ratio: %.2f%%" %
-                  (sum_gpu_active * 100 / (end_us - start_us)))
-        else:
-            print("Missing total time")
+        if start_time_ns == 0:
+            print("Error: No events found.")
+            return
+        app_duration = end_time_ns - start_time_ns
+        self.analysis_result = AnalysisResult(app_duration=app_duration, memcpy_time=memcpy_time, gpu_busy_time=sum_gpu_busy,)
+        self.analysis_result.print_as_str()
+
+    def load_json(self, json_file):
+        """
+        This function is used to load the profiling result from a json file.
+        Args:
+            json_file: the path of the json file
+        """
+        if json_file is None:
+            print("Error: No json file found.")
+            return
+        with open(json_file, "r") as f:
+            self.json_trace = json.load(f)
+    def get_avg_kernel_occupancy(self):
+        """
+        This function is used to get the occupancy of all kernels in the trace file.
+        Returns:
+            a dictionary of kernel occupancy
+        """
+        kernel_occupancy = []
+        cuda_kernels = [_ for _ in self.events_raw if _.device_type() == DeviceType.CUDA and not _.name().strip().startswith("Memcpy")]
+        kernel_occupancies = []
+        for event in self.json_trace['traceEvents']:
+            if event.get('cat', '') == 'kernel':
+                # FIXME: some kernels' occupancy is 0
+                kernel_occupancies.append(event['args']['est. achieved occupancy %'])
+        print("kernel_occupancies: ", kernel_occupancies)
+        avg_occupancy = np.mean(kernel_occupancies)
+        return avg_occupancy

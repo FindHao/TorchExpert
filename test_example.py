@@ -25,8 +25,7 @@ def run_conv2d(input_shape, weight_shape, other_args, profile_folder):
     return x
 
 
-
-def profile(input_shape, weight_shape, other_args):
+def run():
     input = torch.ones(input_shape, dtype=torch.float32, device='cuda')
     weight = torch.ones(weight_shape, dtype=torch.float32, device='cuda')
     bias = other_args[0]
@@ -34,7 +33,11 @@ def profile(input_shape, weight_shape, other_args):
     padding = other_args[2]
     dilation = other_args[3]
     groups = other_args[4]
-    torchexpert.profile(F.conv2d, input, weight, bias, stride, padding, dilation, groups)
+    output = F.conv2d(input, weight, bias, stride, padding, dilation, groups).to('cpu')
+    
+
+def profile(input_shape, weight_shape, other_args):
+    torchexpert.profile(run)
     torchexpert.analyze()
 
 
