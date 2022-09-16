@@ -1,7 +1,4 @@
 import argparse
-from asyncio import events
-from pyexpat import model
-from sys import setprofile
 from torch import profiler
 from torch._C._autograd import DeviceType
 # from torch._C._profiler import _ProfilerEvent, _EventType
