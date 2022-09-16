@@ -229,11 +229,11 @@ class TorchExpert:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--json_path", type=str, default='./')
-    parser.add_argument("--model_name", type=str, default='model')
-    parser.add_argument("--output_csv_file", type=str, default='analysis_result.csv')
-    parser.add_argument("--analyze_json_only", type=bool, default=True)
-    parser.add_argument("--profiler_folder", type=str, default='./logs/')
+    parser.add_argument("--json_path", type=str, default='./', help="the path of the json file or the folder containing the json files")
+    parser.add_argument("--model_name", type=str, default='model', help="the name of the model")
+    parser.add_argument("--output_csv_file", type=str, default='analysis_result.csv', help="the name of the output csv file")
+    parser.add_argument("--analyze_json_only", type=bool, default=True, help="If True, will only analyze the json file. If False, will do the profiling and analysis of the json trace file.")
+    parser.add_argument("--profiler_folder", type=str, default='./logs/', help="the folder to save the PyTorch profiler results")
     args = parser.parse_args()
     torchexpert = TorchExpert(model_name=args.model_name, output_csv_file=args.output_csv_file, analyze_json_only=args.analyze_json_only, profiler_folder=args.profiler_folder)
     torchexpert.analyze(args.json_path)
