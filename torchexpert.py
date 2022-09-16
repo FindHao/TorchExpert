@@ -197,7 +197,11 @@ class TorchExpert:
         Args:
             json_file: the path of the json file
         """
-        json_file = get_latest_file(json_path)
+        # check if json_path is a file or a folder
+        if os.path.isfile(json_path):
+            json_file = json_path
+        else:
+            json_file = get_latest_file(json_path)
         if json_file is None:
             print("Error: No json file found.")
             return
@@ -232,5 +236,5 @@ if __name__ == "__main__":
     parser.add_argument("--profiler_folder", type=str, default='./logs/')
     args = parser.parse_args()
     torchexpert = TorchExpert(model_name=args.model_name, output_csv_file=args.output_csv_file, analyze_json_only=args.analyze_json_only, profiler_folder=args.profiler_folder)
-    profiler.analyze(args.json_path)
+    torchexpert.analyze(args.json_path)
     
