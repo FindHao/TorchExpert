@@ -3,14 +3,16 @@ class AnalysisResult:
     A class to store the analysis result.
     """
 
-    def __init__(self, memcpy_time=0,app_duration=0, gpu_busy_time=0):
+    def __init__(self, memcpy_time=0,app_duration=0, gpu_busy_time=0, avg_kernel_occupancy=0):
         self.memcpy_time = memcpy_time
         self.app_duration = app_duration
         self.sum_gpu_active = app_duration - memcpy_time
         self.sum_gpu_busy = gpu_busy_time
+        self.avg_kernel_occupancy = avg_kernel_occupancy
 
     
     def print_as_str(self):
+        print("")
         print("{:<25} {:>10}".format(
                 "GPU memcpy time", "%.2fms" % (self.memcpy_time / 1e6)))
         print("{:<25} {:>10}".format(
@@ -25,5 +27,7 @@ class AnalysisResult:
                                     (self.sum_gpu_active * 100 / self.app_duration)))
         print("{:<25} {:>10}".format("GPU busy time ratio:", "%.2f%%" %
                                         (self.sum_gpu_busy * 100 / self.app_duration)))
+        print("{:<25} {:>10}".format("Average kernel occupancy:", "%.2f%%" % 
+                                    (self.avg_kernel_occupancy)))
 
 

@@ -121,6 +121,7 @@ class TorchExpert:
         """
         This function is used to analyze the profiling result. Will be changed to add more features in the future.
         """
+        print("\n\n")
         slimevents = []
         end_time_ns = 0
         start_time_ns = self.events_raw[0].start_us() * 1e3 if len(
@@ -154,8 +155,7 @@ class TorchExpert:
         idle_events = self.get_all_idleness(merged_slimevents)
         # get all kernels' occupancy
         self.load_json(get_latest_file(self.profiler_config["profile_folder"]))
-        
-        print("occupancy: ", self.get_avg_kernel_occupancy())
+        avg_kernel_occupancy = self.get_avg_kernel_occupancy()
         sum_gpu_busy = 0
         for slimevent in merged_slimevents:
             # print(slimevent.start_us, slimevent.end_us)
@@ -166,7 +166,7 @@ class TorchExpert:
             print("Error: No events found.")
             return
         app_duration = end_time_ns - start_time_ns
-        self.analysis_result = AnalysisResult(app_duration=app_duration, memcpy_time=memcpy_time, gpu_busy_time=sum_gpu_busy,)
+        self.analysis_result = AnalysisResult(app_duration=app_duration, memcpy_time=memcpy_time, gpu_busy_time=sum_gpu_busy,avg_kernel_occupancy=avg_kernel_occupancy)
         self.analysis_result.print_as_str()
 
     def load_json(self, json_file):
@@ -191,8 +191,10 @@ class TorchExpert:
         kernel_occupancies = []
         for event in self.json_trace['traceEvents']:
             if event.get('cat', '') == 'kernel':
-                # FIXME: some kernels' occupancy is 0
-                kernel_occupancies.append(event['args']['est. achieved occupancy %'])
-        print("kernel_occupancies: ", kernel_occupancies)
+                if event['args'].get('est. achieved occupancy %', 0) == 0:
+                    print("WARNING-> kernel %s's occupancy is 0" % event['name'])
+                else:
+                    kernel_occupancies.append(event['args']['est. achieved occupancy %'])
+        # print("kernel_occupancies: ", kernel_occupancies)
         avg_occupancy = np.mean(kernel_occupancies)
         return avg_occupancy
