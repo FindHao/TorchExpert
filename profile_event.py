@@ -7,7 +7,7 @@ class ProfileEventSlim:
         end_us: end time of the event in microseconds(us)
         include_events: a list of raw events that have overlaps
     """
-    def __init__(self, event, duration_time_ns=None, start_time_ns=None, end_time_ns=None):
+    def __init__(self, event=None, duration_time_ns=None, start_time_ns=None, end_time_ns=None):
         if event is not None:
             # self.duration_time_ns = event.duration_time_ns
             # self.start_time_ns = event.start_time_ns

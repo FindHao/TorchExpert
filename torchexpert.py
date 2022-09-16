@@ -48,7 +48,7 @@ class TorchExpert:
         }
         self.json_trace = None
         self.analysis_result = None
-        self.cuda_kernels = []
+        self.analyze_json_only = False
 
     def set_profile_config(self, activity_groups, profile_detailed, profile_folder, nwarmup):
         self.profiler_config = {
@@ -116,30 +116,34 @@ class TorchExpert:
                 idle_events.append(ProfileEventSlim(
                     event=None, duration_time_ns=events[i].start_time_ns - last_end_time_ns, start_time_ns=last_end_time_ns, end_time_ns=events[i].start_time_ns))
         return idle_events
-
-    def analyze(self):
-        """
-        This function is used to analyze the profiling result. Will be changed to add more features in the future.
-        """
-        print("\n\n")
+    
+    def get_events_from_json(self):
+        slimevents = []
+        end_time_ns = 0
+        start_time_ns = 0
+        memcpy_time = 0
+        for event in self.json_trace['traceEvents']:
+            if event.get('cat', '') == 'kernel' or event.get('cat', '') == 'gpu_memcpy':
+                dur = event['dur']*1e3
+                ts = event['ts']*1e3
+                te = ts + dur
+                slimevents.append(ProfileEventSlim(event=None, duration_time_ns=dur, start_time_ns=ts, end_time_ns=te))
+                end_time_ns = max(end_time_ns, te)
+                if start_time_ns == 0:
+                    start_time_ns = ts
+                else:
+                    start_time_ns = min(start_time_ns, ts)
+                if event.get('cat', '') == 'gpu_memcpy':
+                    memcpy_time += dur
+        return slimevents, start_time_ns, end_time_ns, memcpy_time
+                    
+    def get_events_from_profile(self):
         slimevents = []
         end_time_ns = 0
         start_time_ns = self.events_raw[0].start_us() * 1e3 if len(
             self.events_raw) else 0
         memcpy_time = 0
         for event in self.events_raw:
-            # if event.tag == _EventType.Kineto:
-            #     # @Yueming: It is a workaround for missing device attribution in _ProfilerEvent.
-            #     if event.name().strip() in KINETO_EVENT_ON_CPU:
-            #         continue
-            #     if event.name().strip().startswith("cudaMemcpy"):
-            #         memcpy_time += event.duration_time_ns
-            #     if event.parent.name().strip() not in ['cudaLaunchKernel', 'cudaMemcpyAsync']:
-            #         print("TorcheExpert-> Unexpected kernel ",
-            #               event.name().strip())
-            #     slimevents.append(ProfileEventSlim(event))
-            #     end_time_ns = max(end_time_ns, event.end_time_ns)
-            #     start_time_ns = min(start_time_ns, event.start_time_ns)
             if event.device_type() == DeviceType.CUDA:
                 slimevents.append(ProfileEventSlim(event))
                 # @Future: Update to _ProfilerEvent. The kineto event only has us resolution.
@@ -148,13 +152,24 @@ class TorchExpert:
                 start_time_ns = min(start_time_ns, event.start_us() * 1e3)
                 if event.name().strip().startswith("Memcpy"):
                     memcpy_time += event.duration_us() * 1e3
-        self.cuda_kernels = slimevents
+        return slimevents, start_time_ns, end_time_ns, memcpy_time
+
+    def analyze(self, json_path='./'):
+        """
+        This function is used to analyze the profiling result. Will be changed to add more features in the future.
+        """
+        print("\n\n")
+        self.load_json(json_path)
+        if self.analyze_json_only:
+           slimevents, start_time_ns, end_time_ns, memcpy_time = self.get_events_from_json()
+        else:
+            slimevents, start_time_ns, end_time_ns, memcpy_time = self.get_events_from_profile() 
         merged_slimevents = merge_interval(slimevents)
+
         # get all idleness
         # @TODO: the results are not correct
         idle_events = self.get_all_idleness(merged_slimevents)
         # get all kernels' occupancy
-        self.load_json(get_latest_file(self.profiler_config["profile_folder"]))
         avg_kernel_occupancy = self.get_avg_kernel_occupancy()
         sum_gpu_busy = 0
         for slimevent in merged_slimevents:
@@ -169,25 +184,25 @@ class TorchExpert:
         self.analysis_result = AnalysisResult(app_duration=app_duration, memcpy_time=memcpy_time, gpu_busy_time=sum_gpu_busy,avg_kernel_occupancy=avg_kernel_occupancy)
         self.analysis_result.print_as_str()
 
-    def load_json(self, json_file):
+    def load_json(self, json_path):
         """
         This function is used to load the profiling result from a json file.
         Args:
             json_file: the path of the json file
         """
+        json_file = get_latest_file(json_path)
         if json_file is None:
             print("Error: No json file found.")
             return
         with open(json_file, "r") as f:
             self.json_trace = json.load(f)
+
     def get_avg_kernel_occupancy(self):
         """
         This function is used to get the occupancy of all kernels in the trace file.
         Returns:
             a dictionary of kernel occupancy
         """
-        kernel_occupancy = []
-        cuda_kernels = [_ for _ in self.events_raw if _.device_type() == DeviceType.CUDA and not _.name().strip().startswith("Memcpy")]
         kernel_occupancies = []
         for event in self.json_trace['traceEvents']:
             if event.get('cat', '') == 'kernel':

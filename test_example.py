@@ -38,7 +38,8 @@ def run():
 
 def profile(input_shape, weight_shape, other_args):
     torchexpert.profile(run)
-    torchexpert.analyze()
+    # torchexpert.analyze_json = True
+    torchexpert.analyze("./logs/")
 
 
 
