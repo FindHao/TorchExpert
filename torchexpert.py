@@ -12,6 +12,8 @@ import torch
 import json
 from analysis_result import AnalysisResult
 import numpy as np
+from occupancy_calculator import CudaOccupancyCalculator
+
 
 KINETO_EVENT_ON_CPU = [
     "cudaDeviceGetStreamPriorityRange",
@@ -53,6 +55,8 @@ class TorchExpert:
         self.analyze_json_only = analyze_json_only
         self.model_name = model_name
         self.output_csv_file = output_csv_file
+        self.occup_calc = CudaOccupancyCalculator("8.0")
+
 
     def set_profile_config(self, activity_groups, profile_detailed, profile_folder, nwarmup):
         self.profiler_config = {
@@ -127,7 +131,7 @@ class TorchExpert:
         start_time_ns = 0
         memcpy_time = 0
         for event in self.json_trace['traceEvents']:
-            if event.get('cat', '') == 'kernel' or event.get('cat', '') == 'gpu_memcpy':
+            if event.get('cat', '').lower() == 'kernel' or event.get('cat', '').lower() == 'gpu_memcpy':
                 dur = event['dur']*1e3
                 ts = event['ts']*1e3
                 te = ts + dur
@@ -205,6 +209,7 @@ class TorchExpert:
         if json_file is None:
             print("Error: No json file found.")
             return
+        print("Analyzing json file: {}".format(json_file))
         with open(json_file, "r") as f:
             self.json_trace = json.load(f)
 
@@ -214,17 +219,23 @@ class TorchExpert:
         Returns:
             a dictionary of kernel occupancy
         """
+        sum_duration = 0
         kernel_occupancies = []
         for event in self.json_trace['traceEvents']:
-            if event.get('cat', '') == 'kernel':
-                if event['args'].get('est. achieved occupancy %', 0) == 0:
-                    print("WARNING-> kernel %s's occupancy is 0" %
-                          event['name'])
-                else:
-                    kernel_occupancies.append(
-                        event['args']['est. achieved occupancy %'])
-        # print("kernel_occupancies: ", kernel_occupancies)
-        avg_occupancy = np.mean(kernel_occupancies)
+            if event.get('cat', '').lower() == 'kernel':
+                duration = event['dur']*1e3
+                block_size = np.prod(event['args']['block'])
+                reg_per_thread = event['args']['registers per thread']
+                smem = event['args'].get('shared memory', 0)
+                self.occup_calc.set_inputs(block_size, reg_per_thread, "8.0", smem)
+                occupancy = self.occup_calc.occupancyOfMultiprocessor()
+                occupancy_in_trace = event['args'].get('est. achieved occupancy %', 0)
+                # if occupancy*100 !gccgjudnvkdcghjcetthjvkeggdnkggicy in the trace file: ", occupancy_in_trace)
+                kernel_occupancies.append(occupancy*duration)
+                sum_duration += duration
+                
+        print("kernel_occupancies: ", kernel_occupancies)
+        avg_occupancy = sum(kernel_occupancies)/sum_duration if sum_duration > 0 else 0
         return avg_occupancy
 
 if __name__ == "__main__":
