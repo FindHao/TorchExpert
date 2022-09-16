@@ -37,7 +37,7 @@ class TorchExpert:
     TorchExpert requires PyTorch >= August 8st, 2022
     """
 
-    def __init__(self):
+    def __init__(self, model_name='', output_csv_file=None, analyze_json_only=False, profiler_folder='./logs/'):
         self.prof = None
         self.events_raw = []
         self.event_tree_roots = []
@@ -45,14 +45,14 @@ class TorchExpert:
         self.profiler_config = {
             "activities": [profiler.ProfilerActivity.CUDA, profiler.ProfilerActivity.CPU],
             "profile_detailed": True,
-            "profile_folder": "./logs/",
+            "profile_folder": profiler_folder,
             "nwarmup": 3
         }
         self.json_trace = None
         self.analysis_result = None
-        self.analyze_json_only = False
-        self.model_name = ''
-        self.output_csv_file = None
+        self.analyze_json_only = analyze_json_only
+        self.model_name = model_name
+        self.output_csv_file = output_csv_file
 
     def set_profile_config(self, activity_groups, profile_detailed, profile_folder, nwarmup):
         self.profiler_config = {
@@ -223,3 +223,14 @@ class TorchExpert:
         avg_occupancy = np.mean(kernel_occupancies)
         return avg_occupancy
 
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--json_path", type=str, default='./')
+    parser.add_argument("--model_name", type=str, default='model')
+    parser.add_argument("--output_csv_file", type=str, default='analysis_result.csv')
+    parser.add_argument("--analyze_json_only", type=bool, default=True)
+    parser.add_argument("--profiler_folder", type=str, default='./logs/')
+    args = parser.parse_args()
+    torchexpert = TorchExpert(model_name=args.model_name, output_csv_file=args.output_csv_file, analyze_json_only=args.analyze_json_only, profiler_folder=args.profiler_folder)
+    profiler.analyze(args.json_path)
+    
