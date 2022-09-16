@@ -38,7 +38,10 @@ def run():
 
 def profile(input_shape, weight_shape, other_args):
     torchexpert.profile(run)
-    torchexpert.analyze()
+    # torchexpert.analyze_json = True
+    torchexpert.model_name = "conv2d"
+    torchexpert.output_csv_file = "conv2d.csv"
+    torchexpert.analyze("./logs/")
 
 
 

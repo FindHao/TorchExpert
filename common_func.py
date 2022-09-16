@@ -33,6 +33,7 @@ def get_latest_file(path):
         the latest file path
     """
     list_of_files = glob.glob(path + '/*')
+    list_of_files = [ _ for _ in list_of_files if os.path.isfile(_) and _.endswith(".json")]
     if not list_of_files:
         return None
     latest_file = max(list_of_files, key=os.path.getctime)
