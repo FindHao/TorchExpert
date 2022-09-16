@@ -1,4 +1,6 @@
+import argparse
 from asyncio import events
+from pyexpat import model
 from sys import setprofile
 from torch import profiler
 from torch._C._autograd import DeviceType
@@ -49,6 +51,8 @@ class TorchExpert:
         self.json_trace = None
         self.analysis_result = None
         self.analyze_json_only = False
+        self.model_name = ''
+        self.output_csv_file = None
 
     def set_profile_config(self, activity_groups, profile_detailed, profile_folder, nwarmup):
         self.profiler_config = {
@@ -116,7 +120,7 @@ class TorchExpert:
                 idle_events.append(ProfileEventSlim(
                     event=None, duration_time_ns=events[i].start_time_ns - last_end_time_ns, start_time_ns=last_end_time_ns, end_time_ns=events[i].start_time_ns))
         return idle_events
-    
+
     def get_events_from_json(self):
         slimevents = []
         end_time_ns = 0
@@ -127,7 +131,8 @@ class TorchExpert:
                 dur = event['dur']*1e3
                 ts = event['ts']*1e3
                 te = ts + dur
-                slimevents.append(ProfileEventSlim(event=None, duration_time_ns=dur, start_time_ns=ts, end_time_ns=te))
+                slimevents.append(ProfileEventSlim(
+                    event=None, duration_time_ns=dur, start_time_ns=ts, end_time_ns=te))
                 end_time_ns = max(end_time_ns, te)
                 if start_time_ns == 0:
                     start_time_ns = ts
@@ -136,7 +141,7 @@ class TorchExpert:
                 if event.get('cat', '') == 'gpu_memcpy':
                     memcpy_time += dur
         return slimevents, start_time_ns, end_time_ns, memcpy_time
-                    
+
     def get_events_from_profile(self):
         slimevents = []
         end_time_ns = 0
@@ -161,9 +166,9 @@ class TorchExpert:
         print("\n\n")
         self.load_json(json_path)
         if self.analyze_json_only:
-           slimevents, start_time_ns, end_time_ns, memcpy_time = self.get_events_from_json()
+            slimevents, start_time_ns, end_time_ns, memcpy_time = self.get_events_from_json()
         else:
-            slimevents, start_time_ns, end_time_ns, memcpy_time = self.get_events_from_profile() 
+            slimevents, start_time_ns, end_time_ns, memcpy_time = self.get_events_from_profile()
         merged_slimevents = merge_interval(slimevents)
 
         # get all idleness
@@ -181,8 +186,10 @@ class TorchExpert:
             print("Error: No events found.")
             return
         app_duration = end_time_ns - start_time_ns
-        self.analysis_result = AnalysisResult(app_duration=app_duration, memcpy_time=memcpy_time, gpu_busy_time=sum_gpu_busy,avg_kernel_occupancy=avg_kernel_occupancy)
-        self.analysis_result.print_as_str()
+        self.analysis_result = AnalysisResult(
+            app_duration=app_duration, memcpy_time=memcpy_time, gpu_busy_time=sum_gpu_busy, avg_kernel_occupancy=avg_kernel_occupancy, model_name=self.model_name, output_csv_file=self.output_csv_file)
+        # self.analysis_result.print_as_str()
+        self.analysis_result.print_as_csv()
 
     def load_json(self, json_path):
         """
@@ -207,9 +214,12 @@ class TorchExpert:
         for event in self.json_trace['traceEvents']:
             if event.get('cat', '') == 'kernel':
                 if event['args'].get('est. achieved occupancy %', 0) == 0:
-                    print("WARNING-> kernel %s's occupancy is 0" % event['name'])
+                    print("WARNING-> kernel %s's occupancy is 0" %
+                          event['name'])
                 else:
-                    kernel_occupancies.append(event['args']['est. achieved occupancy %'])
+                    kernel_occupancies.append(
+                        event['args']['est. achieved occupancy %'])
         # print("kernel_occupancies: ", kernel_occupancies)
         avg_occupancy = np.mean(kernel_occupancies)
         return avg_occupancy
+
