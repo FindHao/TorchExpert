@@ -219,9 +219,11 @@ class TorchExpert:
         Returns:
             a dictionary of kernel occupancy
         """
+        sum_duration = 0
         kernel_occupancies = []
         for event in self.json_trace['traceEvents']:
             if event.get('cat', '').lower() == 'kernel':
+                duration = event['dur']*1e3
                 block_size = np.prod(event['args']['block'])
                 reg_per_thread = event['args']['registers per thread']
                 smem = event['args'].get('shared memory', 0)
@@ -229,10 +231,11 @@ class TorchExpert:
                 occupancy = self.occup_calc.occupancyOfMultiprocessor()
                 occupancy_in_trace = event['args'].get('est. achieved occupancy %', 0)
                 # if occupancy*100 !gccgjudnvkdcghjcetthjvkeggdnkggicy in the trace file: ", occupancy_in_trace)
-                kernel_occupancies.append(occupancy)
+                kernel_occupancies.append(occupancy*duration)
+                sum_duration += duration
                 
         print("kernel_occupancies: ", kernel_occupancies)
-        avg_occupancy = np.mean(kernel_occupancies)
+        avg_occupancy = sum(kernel_occupancies)/sum_duration if sum_duration > 0 else 0
         return avg_occupancy
 
 if __name__ == "__main__":
