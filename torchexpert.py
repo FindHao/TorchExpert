@@ -1,7 +1,4 @@
 import argparse
-from asyncio import events
-from pyexpat import model
-from sys import setprofile
 from torch import profiler
 from torch._C._autograd import DeviceType
 # from torch._C._profiler import _ProfilerEvent, _EventType
@@ -234,8 +231,8 @@ class TorchExpert:
                 kernel_occupancies.append(occupancy*duration)
                 sum_duration += duration
                 
-        print("kernel_occupancies: ", kernel_occupancies)
-        avg_occupancy = sum(kernel_occupancies)/sum_duration if sum_duration > 0 else 0
+        # print("kernel_occupancies: ", kernel_occupancies)
+        avg_occupancy = sum(kernel_occupancies)/sum_duration * 100 if sum_duration > 0 else 0
         return avg_occupancy
 
 if __name__ == "__main__":
