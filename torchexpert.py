@@ -232,7 +232,7 @@ class TorchExpert:
                 sum_duration += duration
                 
         # print("kernel_occupancies: ", kernel_occupancies)
-        avg_occupancy = sum(kernel_occupancies)/sum_duration if sum_duration > 0 else 0
+        avg_occupancy = sum(kernel_occupancies)/sum_duration * 100 if sum_duration > 0 else 0
         return avg_occupancy
 
 if __name__ == "__main__":
