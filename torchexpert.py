@@ -37,7 +37,7 @@ class TorchExpert:
     TorchExpert requires PyTorch >= August 8st, 2022
     """
 
-    def __init__(self, model_name='', output_csv_file=None, analyze_json_only=False, profiler_folder='./logs/'):
+    def __init__(self, analyze_json_only, model_name='', output_csv_file=None, profiler_folder='./logs/'):
         self.prof = None
         self.events_raw = []
         self.event_tree_roots = []
@@ -179,8 +179,6 @@ class TorchExpert:
         # get all idleness
         # @TODO: the results are not correct
         idle_events = self.get_all_idleness(merged_slimevents)
-        # get all kernels' occupancy
-        avg_kernel_occupancy = self.get_avg_kernel_occupancy()
         sum_gpu_busy = 0
         for slimevent in merged_slimevents:
             # print(slimevent.start_us, slimevent.end_us)
@@ -192,7 +190,7 @@ class TorchExpert:
             return
         app_duration = end_time_ns - start_time_ns
         self.analysis_result = AnalysisResult(
-            app_duration=app_duration, memcpy_time=memcpy_time, gpu_busy_time=sum_gpu_busy, avg_kernel_occupancy=avg_kernel_occupancy, model_name=self.model_name, output_csv_file=self.output_csv_file)
+            app_duration=app_duration, memcpy_time=memcpy_time, gpu_busy_time=sum_gpu_busy, model_name=self.model_name, output_csv_file=self.output_csv_file)
         # self.analysis_result.print_as_str()
         self.analysis_result.print_as_csv()
 
@@ -241,9 +239,9 @@ class TorchExpert:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--json_path", type=str, default='./', help="the path of the json file or the folder containing the json files")
-    parser.add_argument("--model_name", type=str, default='model', help="the name of the model")
-    parser.add_argument("--output_csv_file", type=str, default='analysis_result.csv', help="the name of the output csv file")
+    parser.add_argument("-i","--input", type=str, default='./', help="the path of the json file or the folder containing the json files")
+    parser.add_argument('-m', "--model_name", type=str, default='model', help="the name of the model")
+    parser.add_argument('-o', "--output_csv_file", type=str, default='analysis_result.csv', help="the name of the output csv file")
     parser.add_argument("--analyze_json_only", type=bool, default=True, help="If True, will only analyze the json file. If False, will do the profiling and analysis of the json trace file.")
     parser.add_argument("--profiler_folder", type=str, default='./logs/', help="the folder to save the PyTorch profiler results")
     args = parser.parse_args()
