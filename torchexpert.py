@@ -37,7 +37,7 @@ class TorchExpert:
     TorchExpert requires PyTorch >= August 8st, 2022
     """
 
-    def __init__(self, analyze_json_only, model_name='', output_csv_file=None, profiler_folder='./logs/'):
+    def __init__(self, analyze_json_only=True, model_name='', output_csv_file=None, profiler_folder='./logs/'):
         self.prof = None
         self.events_raw = []
         self.event_tree_roots = []
@@ -91,13 +91,14 @@ class TorchExpert:
             on_trace_ready=profiler.tensorboard_trace_handler(
                 self.profiler_config["profile_folder"]),
         ) as prof:
-            for _i in range(nwarmup + 1):
+            iter_range=nwarmup+1
+            for _i in range(iter_range):
                 func(*args, **kwargs)
                 # Need to sync here to match run_one_step()'s timed run.
                 torch.cuda.synchronize()
                 # The last call of prof.step() will clean the profile,
                 # so ignore it in the last iteration.
-                if _i != nwarmup:
+                if _i != iter_range - 1:
                     prof.step()
         # print(prof.key_averages(group_by_input_shape=True).table(
         #     sort_by="cpu_time_total", row_limit=30))
@@ -117,10 +118,12 @@ class TorchExpert:
         last_end_time_ns = events[0].end_time_ns
         for i in range(1, len(events)):
             duration = events[i].start_time_ns - last_end_time_ns
-            # ignore the idleness less than 0.01ms
-            if duration > 0.01 * 1e6:
+            # ignore the idleness less than 0.003ms
+            if duration > 0.003 * 1e6:
                 idle_events.append(ProfileEventSlim(
                     event=None, duration_time_ns=events[i].start_time_ns - last_end_time_ns, start_time_ns=last_end_time_ns, end_time_ns=events[i].start_time_ns))
+        # I found some events have overlapped time, so merge them here
+        idle_events = merge_interval(idle_events)
         return idle_events
 
 
