@@ -1,4 +1,5 @@
 import argparse
+from unicodedata import category
 from torch import profiler
 from torch._C._autograd import DeviceType
 # from torch._C._profiler import _ProfilerEvent, _EventType
@@ -122,13 +123,15 @@ class TorchExpert:
                     event=None, duration_time_ns=events[i].start_time_ns - last_end_time_ns, start_time_ns=last_end_time_ns, end_time_ns=events[i].start_time_ns))
         return idle_events
 
+
+
     def get_events_from_json(self):
         slimevents = []
         end_time_ns = 0
         start_time_ns = 0
         memcpy_time = 0
         for event in self.json_trace['traceEvents']:
-            if event.get('cat', '').lower() == 'kernel' or event.get('cat', '').lower() == 'gpu_memcpy':
+            if event.get('cat', '').lower() == 'kernel' or check_event_mem_related(event):
                 dur = event['dur']*1e3
                 ts = event['ts']*1e3
                 te = ts + dur
@@ -139,7 +142,7 @@ class TorchExpert:
                     start_time_ns = ts
                 else:
                     start_time_ns = min(start_time_ns, ts)
-                if event.get('cat', '') == 'gpu_memcpy':
+                if check_event_mem_related(event):
                     memcpy_time += dur
         return slimevents, start_time_ns, end_time_ns, memcpy_time
 
@@ -156,6 +159,7 @@ class TorchExpert:
                 end_time_ns = max(
                     end_time_ns, (event.start_us() + event.duration_us())*1e3)
                 start_time_ns = min(start_time_ns, event.start_us() * 1e3)
+                # @todo: check if the name is correct
                 if event.name().strip().startswith("Memcpy"):
                     memcpy_time += event.duration_us() * 1e3
         return slimevents, start_time_ns, end_time_ns, memcpy_time
