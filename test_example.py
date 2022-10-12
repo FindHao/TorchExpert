@@ -1,4 +1,5 @@
 
+import time
 import torch
 import torch.nn.functional as F
 import argparse
@@ -34,6 +35,8 @@ def run():
     dilation = other_args[3]
     groups = other_args[4]
     output = F.conv2d(input, weight, bias, stride, padding, dilation, groups).to('cpu')
+    # time.sleep(0.5)
+    # output = F.conv2d(input, weight, bias, stride, padding, dilation, groups).to('cpu')
     
 
 def profile(input_shape, weight_shape, other_args):
