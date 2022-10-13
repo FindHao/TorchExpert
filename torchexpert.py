@@ -210,15 +210,14 @@ class TorchExpert:
             slimevents, start_time_ns, end_time_ns, memcpy_time = self.get_cuda_events_from_profile()
         merged_slimevents = merge_interval(slimevents)
         # @Debug: print all the events in merged_slimevents
-        for event in merged_slimevents:
-            for include_event in event.include_events:
-                print("%s start from %.2fms, last for %.2fms" % (include_event.name(), (include_event.start_time_ns - start_time_ns)/1e6, (include_event.end_time_ns - include_event.start_time_ns)/1e6))
+        # for event in merged_slimevents:
+        #     for include_event in event.include_events:
+        #         print("%s start from %.2fms, last for %.2fms" % (include_event.name(), (include_event.start_time_ns - start_time_ns)/1e6, (include_event.end_time_ns - include_event.start_time_ns)/1e6))
         # get all idleness
-        # @TODO: the results are not correct
         idle_events = self.get_all_idleness(merged_slimevents)
         # @Debug: print all the idleness
-        for event in idle_events:
-            print("Idle starts from %.2fms, lasts for %.2fms " % ((event.start_time_ns - start_time_ns)/1e6, (event.end_time_ns - start_time_ns)/1e6))
+        # for event in idle_events:
+        #     print("Idle starts from %.2fms, lasts for %.2fms " % ((event.start_time_ns - start_time_ns)/1e6, (event.end_time_ns - start_time_ns)/1e6))
         sum_gpu_busy = 0
         for slimevent in merged_slimevents:
             # print(slimevent.start_us, slimevent.end_us)
