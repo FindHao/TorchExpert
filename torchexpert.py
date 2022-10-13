@@ -126,6 +126,7 @@ class TorchExpert:
             if duration > 0.01 * 1e6:
                 idle_events.append(ProfileEventSlim(
                     event=None, duration_time_ns=events[i].start_time_ns - last_end_time_ns, start_time_ns=last_end_time_ns, end_time_ns=events[i].start_time_ns))
+            last_end_time_ns = events[i].end_time_ns
         # I found some events have overlapped time, so merge them here
         idle_events = merge_interval(idle_events)
         return idle_events
@@ -201,17 +202,17 @@ class TorchExpert:
         """
         This function is used to analyze the profiling result. Will be changed to add more features in the future.
         """
-        print("\n\n")
-        self.load_json(json_path)
+        print('\n')
         if self.analyze_json_only:
             slimevents, start_time_ns, end_time_ns, memcpy_time = self.get_events_from_json()
+            self.load_json(json_path)
         else:
             slimevents, start_time_ns, end_time_ns, memcpy_time = self.get_cuda_events_from_profile()
         merged_slimevents = merge_interval(slimevents)
         # @Debug: print all the events in merged_slimevents
         for event in merged_slimevents:
             for include_event in event.include_events:
-                print("%s start from %.2fms, last for %.2fms" % (include_event.name(), (include_event.start_time_ns - start_time_ns)/1e6, (include_event.end_time_ns - start_time_ns)/1e6))
+                print("%s start from %.2fms, last for %.2fms" % (include_event.name(), (include_event.start_time_ns - start_time_ns)/1e6, (include_event.end_time_ns - include_event.start_time_ns)/1e6))
         # get all idleness
         # @TODO: the results are not correct
         idle_events = self.get_all_idleness(merged_slimevents)
