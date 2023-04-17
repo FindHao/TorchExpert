@@ -1,7 +1,9 @@
 from torch._C._profiler import _ProfilerEvent
 class ProfileEventSlim:
     """
-    A simplified version of event class. It merges all the raw events that have overlaps.
+    A simplified version of event class. 
+
+    It is used to either become a shadow of the original event class or merge all the raw events that have overlaps.
     Attributes:
         duration_us: duration of the event in microseconds(us)
         start_us: start time of the event in microseconds(us)
@@ -24,6 +26,21 @@ class ProfileEventSlim:
             self.start_time_ns = start_time_ns
             self.end_time_ns = end_time_ns
             self.include_events = []
+
+class IdleEvent:
+    """
+    A class to store the idle event. An idle event is an event that has no corresponding raw event between the left ProfileEventSlim event and the right ProfileEventSlim event.
+    Attributions:
+        start_time: start time of the idle event
+        end_time: end time of the idle event
+        left_event: the ProfileEventSlim event that is on the left of the idle event
+        right_event: the ProfileEventSlim event that is on the right of the idle event. 
+    """
+    def __init__(self, start_time_ns=None, end_time_ns=None, left_event=None, right_event=None):
+        self.start_time_ns = start_time_ns
+        self.end_time_ns = end_time_ns
+        self.left_event = left_event
+        self.right_event = right_event
 
 
 class TraceEvent:
@@ -49,7 +66,7 @@ class TraceEvent:
             self.args = None
 
 
-class Shadow_ProfilerEvent():
+class Shadow_ProfilerEvent:
     """
     A shadow class of _ProfilerEvent to add more attributes.
     """

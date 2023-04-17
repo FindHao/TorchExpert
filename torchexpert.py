@@ -5,8 +5,8 @@ from torch._C._profiler import (_ProfilerEvent, _ExtraFields_TorchOp,
                                 _ExtraFields_PyCCall, _ExtraFields_PyCall,
                                 _EventType)
 from torch.profiler._utils import index_of_first_match, traverse_bfs, traverse_dfs
-from common_func import get_latest_file, merge_interval, check_event_mem_related
-from profile_event import ProfileEventSlim, TraceEvent
+from common_func import get_latest_file, merge_interval, check_event_mem_related, print_all_event_time
+from profile_event import ProfileEventSlim, IdleEvent
 import torch
 import json
 from analysis_result import AnalysisResult
@@ -111,7 +111,7 @@ class TorchExpert:
         #     sort_by="cpu_time_total", row_limit=30))
         self.set_profile(prof)
 
-    def get_all_idleness(self, events):
+    def get_all_idleness(self, events: list[ProfileEventSlim]):
         """
         This function is used to get the idleness of the events.
         Args:
@@ -122,16 +122,16 @@ class TorchExpert:
         if len(events) == 0:
             return []
         idle_events = []
+        last_end_event = events[0]
         last_end_time_ns = events[0].end_time_ns
+        # print_all_event_time(events)
         for i in range(1, len(events)):
             duration = events[i].start_time_ns - last_end_time_ns
             # ignore the idleness less than 0.01ms
             if duration > 0.01 * 1e6:
-                idle_events.append(ProfileEventSlim(
-                    event=None, duration_time_ns=events[i].start_time_ns - last_end_time_ns, start_time_ns=last_end_time_ns, end_time_ns=events[i].start_time_ns))
+                idle_events.append(IdleEvent(start_time_ns=last_end_time_ns, end_time_ns=events[i].start_time_ns, left_event=last_end_event, right_event=events[i]))
             last_end_time_ns = events[i].end_time_ns
-        # I found some events have overlapped time, so merge them here
-        idle_events = merge_interval(idle_events)
+        # print_all_event_time(idle_events)
         return idle_events
 
     def get_events_from_json(self):
@@ -172,6 +172,9 @@ class TorchExpert:
                     memcpy_time += event.duration_us() * 1e3
         return slimevents, start_time_ns, end_time_ns, memcpy_time
 
+    """
+    In this function, the slim events are shadow of the raw events.
+    """
     def get_cuda_events(self):
         slimevents = []
         end_time_ns = 0
@@ -192,6 +195,10 @@ class TorchExpert:
                     start_time_ns = event.start_time_ns
                 else:
                     start_time_ns = min(start_time_ns, event.start_time_ns)
+            else:
+                # @FindHao TODO: check other events
+                pass
+            
         return slimevents, start_time_ns, end_time_ns, memcpy_time
 
 
