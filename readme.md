@@ -4,4 +4,4 @@
 # Requirements
 
 - Python 3.8+
-- PyTorch development version (2022.09.14 or later)
+- PyTorch version (2.0 or later)
