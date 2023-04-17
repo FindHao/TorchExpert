@@ -1,9 +1,11 @@
 import argparse
 from torch import profiler
 from torch._C._autograd import DeviceType
-from torch._C._profiler import _ProfilerEvent, _EventType
-from torch.profiler._pattern_matcher import eventTreeBFS
-from common_func import *
+from torch._C._profiler import (_ProfilerEvent, _ExtraFields_TorchOp,
+                                _ExtraFields_PyCCall, _ExtraFields_PyCall,
+                                _EventType)
+from torch.profiler._utils import index_of_first_match, traverse_bfs, traverse_dfs
+from common_func import get_latest_file, merge_interval, check_event_mem_related
 from profile_event import ProfileEventSlim, TraceEvent
 import torch
 import json
@@ -57,6 +59,7 @@ class TorchExpert:
         self.model_name = model_name
         self.output_csv_file = output_csv_file
         self.occup_calc = CudaOccupancyCalculator("8.0")
+        self.idle_events = []
 
 
     def set_profile_config(self, activity_groups, profile_detailed, profile_folder, nwarmup):
@@ -76,7 +79,7 @@ class TorchExpert:
             self.events_raw = prof.profiler.kineto_results.events()
         else:
             self.event_tree_roots = prof.profiler.kineto_results.experimental_event_tree()
-            self.events_raw = list(eventTreeBFS(self.event_tree_roots))
+            self.events_raw = list(traverse_bfs(self.event_tree_roots))
         
 
     def profile(self, func, *args, **kwargs):
@@ -169,20 +172,20 @@ class TorchExpert:
                     memcpy_time += event.duration_us() * 1e3
         return slimevents, start_time_ns, end_time_ns, memcpy_time
 
-    def get_cuda_events_from_torchtidy(self):
+    def get_cuda_events(self):
         slimevents = []
         end_time_ns = 0
         start_time_ns = self.events_raw[0].start_time_ns if len(self.events_raw) else 0
         memcpy_time = 0
         for event in self.events_raw:
             if event.tag == _EventType.Kineto:
-                if event.name().strip() in KINETO_EVENT_ON_CPU:
+                if event.name.strip() in KINETO_EVENT_ON_CPU:
                     continue
-                if event.name().strip().startswith("Memcpy"):
+                if event.name.strip().startswith("Memcpy"):
                     memcpy_time += event.duration_time_ns
-                if event.parent.name().strip() not in ['cudaLaunchKernel', 'cudaMemcpyAsync']:
+                if event.parent.name.strip() not in ['cudaLaunchKernel', 'cudaMemcpyAsync']:
                     print("TorcheExpert-> Unexpected kernel ",
-                          event.name().strip())
+                          event.name.strip())
                 slimevents.append(ProfileEventSlim(event))
                 end_time_ns = max(end_time_ns, event.end_time_ns)
                 if start_time_ns == 0:
@@ -196,7 +199,10 @@ class TorchExpert:
         if USE_KINDETO_API:
             return self.get_cuda_events_from_kineto()
         else:
-            return self.get_cuda_events_from_torchtidy()
+            return self.get_cuda_events()
+
+    def analyze_idleness(self):
+        pass
 
     def analyze(self, json_path='./'):
         """
@@ -214,10 +220,11 @@ class TorchExpert:
         #     for include_event in event.include_events:
         #         print("%s start from %.2fms, last for %.2fms" % (include_event.name(), (include_event.start_time_ns - start_time_ns)/1e6, (include_event.end_time_ns - include_event.start_time_ns)/1e6))
         # get all idleness
-        idle_events = self.get_all_idleness(merged_slimevents)
+        self.idle_events = self.get_all_idleness(merged_slimevents)
         # @Debug: print all the idleness
         # for event in idle_events:
         #     print("Idle starts from %.2fms, lasts for %.2fms " % ((event.start_time_ns - start_time_ns)/1e6, (event.end_time_ns - start_time_ns)/1e6))
+        self.analyze_idleness()
         sum_gpu_busy = 0
         for slimevent in merged_slimevents:
             # print(slimevent.start_us, slimevent.end_us)
