@@ -1,3 +1,11 @@
+import os
+
+
+def check_first_line(file_path):
+    with open(file_path, 'r') as f:
+        first_line = f.readline().strip()
+        return first_line == "Model, memcpy, active, busy, total, memcpy ratio, active ratio, busy ratio"
+
 class AnalysisResult:
     """
     A class to store the analysis result.
@@ -12,7 +20,6 @@ class AnalysisResult:
         self.app_duration = app_duration
         self.gpu_active_time = gpu_busy_time - memcpy_time
         self.gpu_busy_time = gpu_busy_time
-        self.avg_kernel_occupancy = avg_kernel_occupancy
         self.model_name = model_name
         self.output_csv_file = output_csv_file
 
@@ -32,23 +39,28 @@ class AnalysisResult:
                                      (self.gpu_active_time * 100 / self.app_duration)))
         print("{:<25} {:>10}".format("GPU busy time ratio:", "%.2f%%" %
                                      (self.gpu_busy_time * 100 / self.app_duration)))
-        print("{:<25} {:>10}".format("Average kernel occupancy:", "%.2f%%" %
-                                     (self.avg_kernel_occupancy)))
 
     def print_as_csv(self):
-        # print("Model, memcpy, active, busy, total, memcpy ratio, active ratio, busy ratio, average occupancy")
+        # print("Model, memcpy, active, busy, total, memcpy ratio, active ratio, busy ratio")
         if self.output_csv_file:
-            out_str = "%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n" % (
-                self.model_name,
-                self.memcpy_time / 1e6,
-                self.gpu_active_time / 1e6,
-                self.gpu_busy_time / 1e6,
-                self.app_duration / 1e6,
-                self.memcpy_time * 100 / self.app_duration,
-                self.gpu_active_time * 100 / self.app_duration,
-                self.gpu_busy_time * 100 / self.app_duration,
-                self.avg_kernel_occupancy)
-            with open(self.output_csv_file, "a") as f:
-                f.write(out_str)
+            lines = []
+            if os.path.isfile(self.output_csv_file):
+                with open(self.output_csv_file, 'r') as f:
+                    lines = f.readlines()
+            table_head = "Model, memcpy, active, busy, total, memcpy ratio, active ratio, busy ratio\n"
+            if (len(lines) > 0 and lines[0] != table_head) or len(lines) == 0:
+                lines.insert(0, table_head)
+            out_str = "%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n" % (
+            self.model_name,
+            self.memcpy_time / 1e6,
+            self.gpu_active_time / 1e6,
+            self.gpu_busy_time / 1e6,
+            self.app_duration / 1e6,
+            self.memcpy_time * 100 / self.app_duration,
+            self.gpu_active_time * 100 / self.app_duration,
+            self.gpu_busy_time * 100 / self.app_duration)
+            lines.append(out_str)
+            with open(self.output_csv_file, 'w') as f:
+                f.writelines(lines)
         else:
             print("output_csv_file is not set")

@@ -38,3 +38,11 @@ def get_latest_file(path):
         return None
     latest_file = max(list_of_files, key=os.path.getctime)
     return latest_file
+
+def check_event_mem_related(event):
+    category = event.get('cat', '').lower()
+    # old trace format use 'memcpy and memset' as category
+    if category in ['gpu_memcpy', 'gpu_memset', 'memcpy', 'memset']:
+        return True
+    else:
+        return False

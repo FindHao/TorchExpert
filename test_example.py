@@ -1,4 +1,5 @@
 
+import time
 import torch
 import torch.nn.functional as F
 import argparse
@@ -34,11 +35,15 @@ def run():
     dilation = other_args[3]
     groups = other_args[4]
     output = F.conv2d(input, weight, bias, stride, padding, dilation, groups).to('cpu')
+    time.sleep(0.5)
+    output = F.conv2d(input, weight, bias, stride, padding, dilation, groups).to('cpu')
+    # time.sleep(0.5)
+    # output = F.conv2d(input, weight, bias, stride, padding, dilation, groups).to('cpu')
     
 
-def profile(input_shape, weight_shape, other_args):
+def profile():
     torchexpert.profile(run)
-    # torchexpert.analyze_json = True
+    torchexpert.analyze_json_only = False
     torchexpert.model_name = "conv2d"
     torchexpert.output_csv_file = "conv2d.csv"
     torchexpert.analyze("./logs/")
@@ -62,4 +67,4 @@ if __name__ == "__main__":
         input_shape = (32, 224, 56, 56)
         other_args = [None, (1, 1), (1, 1), (1, 1), 2]
     weight_shape = (224, 112, 3, 3)
-    profile(input_shape, weight_shape, other_args)
+    profile()
