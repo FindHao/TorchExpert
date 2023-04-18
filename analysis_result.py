@@ -76,7 +76,7 @@ class AnalysisResult:
             f.write("Model: %s\n" % self.model_name)
             for i, idle_pair in enumerate(self.idle_event_pairs):
                 f.write("Idle event pair %d:\n" % i)
-                f.write("from %.2fms to %.2fms\n" % ((idle_pair[0].start_time_ns - self.start_time_ns) / 1e6, (idle_pair[0].end_time_ns - self.start_time_ns) / 1e6))
+                f.write("from %.2fms to %.2fms, duration: %.2fms\n" % ((idle_pair[0].start_time_ns - self.start_time_ns) / 1e6, (idle_pair[0].end_time_ns - self.start_time_ns) / 1e6, (idle_pair[0].end_time_ns - idle_pair[0].start_time_ns) / 1e6))
                 f.write("LCA: %s\n" % idle_pair[1].name)
                 f.write("Left raw event: %s\n" % idle_pair[2].name)
                 f.write("Right raw event: %s\n" % idle_pair[3].name)
