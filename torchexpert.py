@@ -5,15 +5,16 @@ from torch._C._profiler import (_ProfilerEvent, _ExtraFields_TorchOp,
                                 _ExtraFields_PyCCall, _ExtraFields_PyCall,
                                 _EventType)
 from torch.profiler._utils import index_of_first_match, traverse_bfs, traverse_dfs
-from common_func import get_latest_file, merge_interval, check_event_mem_related, print_all_event_time
+from common_func import get_latest_file, merge_interval, check_event_mem_related, print_all_event_time, get_all_events_in_path
 from profile_event import ProfileEventSlim, IdleEvent
 import torch
 import json
 from analysis_result import AnalysisResult
 import numpy as np
 from occupancy_calculator import CudaOccupancyCalculator
+import os
 
-
+# @FindHao TODO: how about other new events?
 KINETO_EVENT_ON_CPU = [
     "cudaDeviceGetStreamPriorityRange",
     "cudaStreamGetPriority",
@@ -208,8 +209,29 @@ class TorchExpert:
         else:
             return self.get_cuda_events()
 
+    """
+    This function is used to analyze the root causes of the idleness.
+    """
     def analyze_idleness(self):
-        pass
+        for idle_event in self.idle_events:
+            left_raw_event = idle_event.left_event.include_events[0]
+            right_raw_event = idle_event.right_event.include_events[-1]
+            # LCA problem. Could be optimized.
+            all_events_left = get_all_events_in_path(left_raw_event)
+            all_events_right = get_all_events_in_path(right_raw_event)
+            min_len = min(len(all_events_left), len(all_events_right))
+            lca = None
+            # @TODO: add a fake root node to avoid this check
+            if all_events_left[-1] != all_events_right[-1]:
+                raise Exception("They don't share the same root event.")
+            for i in range(2, min_len+1):
+                if all_events_left[len(all_events_left) - i] != all_events_right[len(all_events_right) - i]:
+                    lca = all_events_left[len(all_events_left) - i + 1]
+                    break
+            assert lca is not None
+            print("LCA is %s" % lca.name)
+
+
 
     def analyze(self, json_path='./'):
         """

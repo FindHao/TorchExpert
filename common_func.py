@@ -1,7 +1,7 @@
 import glob
 import os
 from profile_event import ProfileEventSlim
-
+from torch._C._profiler import _ProfilerEvent
 
 def print_all_event_time(intervals):
     # print all event start time and end time
@@ -63,3 +63,18 @@ def check_event_mem_related(event):
         return True
     else:
         return False
+
+"""
+Args:
+    event: the target event
+Returns:
+    a list of events in a path from the root to the event
+"""
+def get_all_events_in_path(event:_ProfilerEvent):
+    all_events = []
+    all_events.append(event)
+    tmp_event = event
+    while tmp_event.parent:
+        tmp_event = tmp_event.parent
+        all_events.append(tmp_event)
+    return all_events
