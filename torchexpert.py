@@ -32,35 +32,37 @@ KINETO_EVENT_ON_CPU = [
 USE_KINDETO_API = False
 
 class TorchExpert:
-    """
-    This class is used to profile the model and do the analysis.
-    Attribute:
-        prof: the profiler reference
-        events_raw: the raw events from the profiler.
-        profiler_config: the config for profiling
-        json_trace: the json file of the profiling result
-        cuda_kernels: cuda kernels, ProfilerEventSlim
-    TorchExpert requires PyTorch >= August 8st, 2022
-    """
-
-    def __init__(self, analyze_json_only=True, model_name='', output_csv_file=None, profiler_folder='./logs/'):
+    def __init__(self, analyze_json_only=True, model_name='', output_csv_file=None, profiler_folder='./logs/', log_file=None):
         self.prof = None
+        # events_raw: the raw events from the profiler. 
         self.events_raw = []
+        # there could be multiple root events in the trace view
         self.event_tree_roots = []
+        # @deprecated
         self.events_kineto = []
+        # this config is for pytorch profiler
         self.profiler_config = {
             "activities": [profiler.ProfilerActivity.CUDA, profiler.ProfilerActivity.CPU],
             "profile_detailed": True,
             "profile_folder": profiler_folder,
             "nwarmup": 3
         }
+        # json_trace: the json file of the profiling result
         self.json_trace = None
+        # It is an instance of AnalysisResult
         self.analysis_result = None
+        # if it is true, will do the offline analysis
         self.analyze_json_only = analyze_json_only
         self.model_name = model_name
+        # store the gpu active time analysis
         self.output_csv_file = output_csv_file
+        # @deprecated
         self.occup_calc = CudaOccupancyCalculator("8.0")
+        # I create virtual idle events to represent the idleness between raw events
         self.idle_events = []
+        # store the idleness analysis for now
+        self.log_file = log_file
+        self.start_time_ns = None
 
 
     def set_profile_config(self, activity_groups, profile_detailed, profile_folder, nwarmup):
@@ -229,8 +231,7 @@ class TorchExpert:
                     lca = all_events_left[len(all_events_left) - i + 1]
                     break
             assert lca is not None
-            print("LCA is %s" % lca.name)
-
+            self.analysis_result.idle_event_pairs.append((idle_event, lca, left_raw_event, right_raw_event))
 
 
     def analyze(self, json_path='./'):
@@ -244,16 +245,6 @@ class TorchExpert:
         else:
             slimevents, start_time_ns, end_time_ns, memcpy_time = self.get_cuda_events_from_profile()
         merged_slimevents = merge_interval(slimevents)
-        # @Debug: print all the events in merged_slimevents
-        # for event in merged_slimevents:
-        #     for include_event in event.include_events:
-        #         print("%s start from %.2fms, last for %.2fms" % (include_event.name(), (include_event.start_time_ns - start_time_ns)/1e6, (include_event.end_time_ns - include_event.start_time_ns)/1e6))
-        # get all idleness
-        self.idle_events = self.get_all_idleness(merged_slimevents)
-        # @Debug: print all the idleness
-        # for event in idle_events:
-        #     print("Idle starts from %.2fms, lasts for %.2fms " % ((event.start_time_ns - start_time_ns)/1e6, (event.end_time_ns - start_time_ns)/1e6))
-        self.analyze_idleness()
         sum_gpu_busy = 0
         for slimevent in merged_slimevents:
             # print(slimevent.start_us, slimevent.end_us)
@@ -263,11 +254,15 @@ class TorchExpert:
         if start_time_ns == 0:
             print("Error: No events found.")
             return
+        self.start_time_ns = start_time_ns
         app_duration = end_time_ns - start_time_ns
         self.analysis_result = AnalysisResult(
-            app_duration=app_duration, memcpy_time=memcpy_time, gpu_busy_time=sum_gpu_busy, model_name=self.model_name, output_csv_file=self.output_csv_file)
+            app_duration=app_duration, memcpy_time=memcpy_time, gpu_busy_time=sum_gpu_busy, model_name=self.model_name, output_csv_file=self.output_csv_file, log_file=self.log_file, start_time_ns=start_time_ns)
+        self.idle_events = self.get_all_idleness(merged_slimevents)
+        self.analyze_idleness()
         # self.analysis_result.print_as_str()
         self.analysis_result.print_as_csv()
+        self.analysis_result.print_to_log()
 
     def load_json(self, json_path):
         """
@@ -319,7 +314,8 @@ if __name__ == "__main__":
     parser.add_argument('-o', "--output_csv_file", type=str, default='analysis_result.csv', help="the name of the output csv file")
     parser.add_argument("--analyze_json_only", type=bool, default=True, help="If True, will only analyze the json file. If False, will do the profiling and analysis of the json trace file.")
     parser.add_argument("--profiler_folder", type=str, default='./logs/', help="the folder to save the PyTorch profiler results")
+    parser.add_argument("--log_file", type=str, default='torchexpert.log', help="the log file to save the analysis results")
     args = parser.parse_args()
-    torchexpert = TorchExpert(model_name=args.model_name, output_csv_file=args.output_csv_file, analyze_json_only=args.analyze_json_only, profiler_folder=args.profiler_folder)
+    torchexpert = TorchExpert(model_name=args.model_name, output_csv_file=args.output_csv_file, analyze_json_only=args.analyze_json_only, profiler_folder=args.profiler_folder, log_file=args.log_file)
     torchexpert.analyze(args.json_path)
     

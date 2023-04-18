@@ -46,6 +46,7 @@ def profile():
     torchexpert.analyze_json_only = False
     torchexpert.model_name = "conv2d"
     torchexpert.output_csv_file = "conv2d.csv"
+    torchexpert.log_file = "torchexpert.log"
     torchexpert.analyze("./logs/")
 
 
