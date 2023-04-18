@@ -216,8 +216,14 @@ class TorchExpert:
     """
     def analyze_idleness(self):
         for idle_event in self.idle_events:
+            # the last raw CUDA event before idle
             left_raw_event = idle_event.left_event.include_events[0]
+            # the event near to LCA in the path from left_raw_event to root
+            left_raw_event_top = None
+            # the first raw CUDA event after idle
             right_raw_event = idle_event.right_event.include_events[-1]
+            # the event near to LCA in the path from right_raw_event to root
+            right_raw_event_top = None
             # LCA problem. Could be optimized.
             all_events_left = get_all_events_in_path(left_raw_event)
             all_events_right = get_all_events_in_path(right_raw_event)
@@ -229,9 +235,11 @@ class TorchExpert:
             for i in range(2, min_len+1):
                 if all_events_left[len(all_events_left) - i] != all_events_right[len(all_events_right) - i]:
                     lca = all_events_left[len(all_events_left) - i + 1]
+                    left_raw_event_top = all_events_left[len(all_events_left) - i]
+                    right_raw_event_top = all_events_right[len(all_events_right) - i]
                     break
             assert lca is not None
-            self.analysis_result.idle_event_pairs.append((idle_event, lca, left_raw_event, right_raw_event))
+            self.analysis_result.idle_event_pairs.append((idle_event, lca, left_raw_event, left_raw_event_top, right_raw_event, right_raw_event_top))
 
 
     def analyze(self, json_path='./'):

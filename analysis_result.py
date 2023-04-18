@@ -25,7 +25,7 @@ class AnalysisResult:
         self.output_csv_file = output_csv_file
         # This file comes from the TorchExpert.log_file
         self.log_file = log_file
-        # [(idle_event, lca, left_raw_event, right_raw_event),]
+        # [(idle_event, lca, left_raw_event, left_raw_event_top, right_raw_event, right_raw_event_top),]
         self.idle_event_pairs = []
         self.start_time_ns = start_time_ns
 
@@ -79,4 +79,6 @@ class AnalysisResult:
                 f.write("from %.2fms to %.2fms, duration: %.2fms\n" % ((idle_pair[0].start_time_ns - self.start_time_ns) / 1e6, (idle_pair[0].end_time_ns - self.start_time_ns) / 1e6, (idle_pair[0].end_time_ns - idle_pair[0].start_time_ns) / 1e6))
                 f.write("LCA: %s\n" % idle_pair[1].name)
                 f.write("Left raw event: %s\n" % idle_pair[2].name)
-                f.write("Right raw event: %s\n" % idle_pair[3].name)
+                f.write("Left raw event top: %s\n" % idle_pair[3].name)
+                f.write("Right raw event: %s\n" % idle_pair[4].name)
+                f.write("Right raw event top: %s\n" % idle_pair[5].name)
