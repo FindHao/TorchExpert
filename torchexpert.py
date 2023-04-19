@@ -134,6 +134,7 @@ class TorchExpert:
             if duration > 0.01 * 1e6:
                 idle_events.append(IdleEvent(start_time_ns=last_end_time_ns, end_time_ns=events[i].start_time_ns, left_event=last_end_event, right_event=events[i]))
             last_end_time_ns = events[i].end_time_ns
+            last_end_event = events[i]
         # print_all_event_time(idle_events)
         return idle_events
 
@@ -217,11 +218,11 @@ class TorchExpert:
     def analyze_idleness(self):
         for idle_event in self.idle_events:
             # the last raw CUDA event before idle
-            left_raw_event = idle_event.left_event.include_events[0]
+            left_raw_event = idle_event.left_event.include_events[-1]
             # the event near to LCA in the path from left_raw_event to root
             left_raw_event_top = None
             # the first raw CUDA event after idle
-            right_raw_event = idle_event.right_event.include_events[-1]
+            right_raw_event = idle_event.right_event.include_events[0]
             # the event near to LCA in the path from right_raw_event to root
             right_raw_event_top = None
             # LCA problem. Could be optimized.

@@ -76,9 +76,16 @@ class AnalysisResult:
             f.write("Model: %s\n" % self.model_name)
             for i, idle_pair in enumerate(self.idle_event_pairs):
                 f.write("Idle event pair %d:\n" % i)
-                f.write("from %.2fms to %.2fms, duration: %.2fms\n" % ((idle_pair[0].start_time_ns - self.start_time_ns) / 1e6, (idle_pair[0].end_time_ns - self.start_time_ns) / 1e6, (idle_pair[0].end_time_ns - idle_pair[0].start_time_ns) / 1e6))
-                f.write("LCA: %s\n" % idle_pair[1].name)
-                f.write("Left raw event: %s\n" % idle_pair[2].name)
-                f.write("Left raw event top: %s\n" % idle_pair[3].name)
-                f.write("Right raw event: %s\n" % idle_pair[4].name)
-                f.write("Right raw event top: %s\n" % idle_pair[5].name)
+                idle_event, lca, left_raw_event, left_raw_event_top, right_raw_event, right_raw_event_top = idle_pair
+                f.write("from %.2fms to %.2fms, duration: %.2fms\n" % ((idle_event.start_time_ns - self.start_time_ns) / 1e6,
+                        (idle_event.end_time_ns - self.start_time_ns) / 1e6, (idle_event.end_time_ns - idle_event.start_time_ns) / 1e6))
+                f.write("LCA: %s\n" % lca.name)
+                f.write("Left raw event: %s\n" % left_raw_event.name)
+                f.write("Left raw event top: %s\n" % left_raw_event_top.name)
+                f.write("Right raw event: %s\n" % right_raw_event.name)
+                f.write("Right raw event top: %s\n" % right_raw_event_top.name)
+                left_i = lca.children.index(left_raw_event_top)
+                right_i = lca.children.index(right_raw_event_top)
+                for i in range(left_i+1, right_i):
+                    f.write("Idle event %d: %s\n" % (i, lca.children[i].name))
+
