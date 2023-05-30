@@ -326,7 +326,7 @@ if __name__ == "__main__":
     parser.add_argument("-i","--input", type=str, default='./', help="The path of the json file or the path containing the json files. If you specify a path, torchexpert will search for the latest json file in that path.")
     parser.add_argument('-m', "--model_name", type=str, help="the name of the model")
     parser.add_argument('-o', "--output_csv_file", type=str, default='analysis_result.csv', help="the name of the output csv file")
-    parser.add_argument("--log_file", type=str, default='torchexpert.log', help="the log file to save the analysis results")
+    parser.add_argument("--log_file", type=str, default='torchexpert.log', help="the log file to save the idleness analysis results")
     args = parser.parse_args()
     if not args.model_name:
         args.model_name = args.input
