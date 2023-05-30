@@ -49,6 +49,7 @@ class AnalysisResult:
     def print_as_csv(self):
         # print("Model, memcpy, active, busy, total, memcpy ratio, active ratio, busy ratio")
         if self.output_csv_file:
+            print("Output csv file: %s" % self.output_csv_file)
             lines = []
             if os.path.isfile(self.output_csv_file):
                 with open(self.output_csv_file, 'r') as f:
