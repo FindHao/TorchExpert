@@ -293,6 +293,8 @@ class TorchExpert:
             print("Error: No json file found.")
             return
         print("Analyzing json file: {}".format(json_file))
+        if self.model_name == '':
+            self.model_name = os.path.basename(json_file).split('.')[0]
         with open(json_file, "r") as f:
             self.json_trace = json.load(f)
 
@@ -329,8 +331,6 @@ if __name__ == "__main__":
     parser.add_argument('-o', "--output_csv_file", type=str, default='analysis_result.csv', help="the name of the output csv file")
     parser.add_argument("--log_file", type=str, default='torchexpert.log', help="the log file to save the idleness analysis results")
     args = parser.parse_args()
-    if not args.model_name:
-        args.model_name = args.input
     torchexpert = TorchExpert(model_name=args.model_name, output_csv_file=args.output_csv_file, input_mode=INPUT_MODE_JSON, log_file=args.log_file)
     torchexpert.analyze(args.input)
     

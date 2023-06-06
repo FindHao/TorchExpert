@@ -73,7 +73,7 @@ class AnalysisResult:
             print("output_csv_file is not set")
 
     def print_to_log(self):
-        with open(self.log_file, 'w') as f:
+        with open(self.log_file, 'a') as f:
             f.write("Model: %s\n" % self.model_name)
             for i, idle_pair in enumerate(self.idle_event_pairs):
                 f.write("Idle event pair %d:\n" % i)
