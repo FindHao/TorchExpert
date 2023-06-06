@@ -14,6 +14,10 @@ import numpy as np
 from occupancy_calculator import CudaOccupancyCalculator
 import os
 
+INPUT_MODE_JSON=0
+INPUT_MODE_PROF=1
+
+
 # @FindHao TODO: how about other new events?
 KINETO_EVENT_ON_CPU = [
     "cudaDeviceGetStreamPriorityRange",
@@ -32,7 +36,7 @@ KINETO_EVENT_ON_CPU = [
 USE_KINDETO_API = False
 
 class TorchExpert:
-    def __init__(self, analyze_json_only=True, model_name='', output_csv_file=None, profiler_folder='./logs/', log_file=None):
+    def __init__(self, input_mode=INPUT_MODE_PROF, model_name='', output_csv_file=None, profiler_folder='./logs/', log_file=None):
         self.prof = None
         # events_raw: the raw events from the profiler. 
         self.events_raw = []
@@ -52,7 +56,7 @@ class TorchExpert:
         # It is an instance of AnalysisResult
         self.analysis_result = None
         # if it is true, will do the offline analysis
-        self.analyze_json_only = analyze_json_only
+        self.input_mode = input_mode
         self.model_name = model_name
         # store the gpu active time analysis
         self.output_csv_file = output_csv_file
@@ -248,9 +252,9 @@ class TorchExpert:
         This function is used to analyze the profiling result. Will be changed to add more features in the future.
         """
         print('\n')
-        if self.analyze_json_only:
-            slimevents, start_time_ns, end_time_ns, memcpy_time = self.get_events_from_json()
+        if self.input_mode == INPUT_MODE_JSON:
             self.load_json(json_path)
+            slimevents, start_time_ns, end_time_ns, memcpy_time = self.get_events_from_json()
         else:
             slimevents, start_time_ns, end_time_ns, memcpy_time = self.get_cuda_events_from_profile()
         merged_slimevents = merge_interval(slimevents)
@@ -267,11 +271,12 @@ class TorchExpert:
         app_duration = end_time_ns - start_time_ns
         self.analysis_result = AnalysisResult(
             app_duration=app_duration, memcpy_time=memcpy_time, gpu_busy_time=sum_gpu_busy, model_name=self.model_name, output_csv_file=self.output_csv_file, log_file=self.log_file, start_time_ns=start_time_ns)
-        self.idle_events = self.get_all_idleness(merged_slimevents)
-        self.analyze_idleness()
+        if self.input_mode == INPUT_MODE_PROF:
+            self.idle_events = self.get_all_idleness(merged_slimevents)
+            self.analyze_idleness()
+            self.analysis_result.print_to_log()
         # self.analysis_result.print_as_str()
         self.analysis_result.print_as_csv()
-        self.analysis_result.print_to_log()
 
     def load_json(self, json_path):
         """
@@ -299,6 +304,7 @@ class TorchExpert:
         """
         sum_duration = 0
         kernel_occupancies = []
+        assert self.json_trace is not None
         for event in self.json_trace['traceEvents']:
             if event.get('cat', '').lower() == 'kernel':
                 duration = event['dur']*1e3
@@ -318,13 +324,13 @@ class TorchExpert:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-i","--input", type=str, default='./', help="the path of the json file or the folder containing the json files")
-    parser.add_argument('-m', "--model_name", type=str, default='model', help="the name of the model")
+    parser.add_argument("-i","--input", type=str, default='./', help="The path of the json file or the path containing the json files. If you specify a path, torchexpert will search for the latest json file in that path.")
+    parser.add_argument('-m', "--model_name", type=str, help="the name of the model")
     parser.add_argument('-o', "--output_csv_file", type=str, default='analysis_result.csv', help="the name of the output csv file")
-    parser.add_argument("--analyze_json_only", type=bool, default=True, help="If True, will only analyze the json file. If False, will do the profiling and analysis of the json trace file.")
-    parser.add_argument("--profiler_folder", type=str, default='./logs/', help="the folder to save the PyTorch profiler results")
-    parser.add_argument("--log_file", type=str, default='torchexpert.log', help="the log file to save the analysis results")
+    parser.add_argument("--log_file", type=str, default='torchexpert.log', help="the log file to save the idleness analysis results")
     args = parser.parse_args()
-    torchexpert = TorchExpert(model_name=args.model_name, output_csv_file=args.output_csv_file, analyze_json_only=args.analyze_json_only, profiler_folder=args.profiler_folder, log_file=args.log_file)
-    torchexpert.analyze(args.json_path)
+    if not args.model_name:
+        args.model_name = args.input
+    torchexpert = TorchExpert(model_name=args.model_name, output_csv_file=args.output_csv_file, input_mode=INPUT_MODE_JSON, log_file=args.log_file)
+    torchexpert.analyze(args.input)
     
