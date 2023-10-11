@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import argparse
 from torch import profiler
 from torch._C._autograd import DeviceType
