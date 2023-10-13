@@ -6,7 +6,7 @@ from torch._C._profiler import (_ProfilerEvent, _ExtraFields_TorchOp,
                                 _ExtraFields_PyCCall, _ExtraFields_PyCall,
                                 _EventType)
 from torch.profiler._utils import index_of_first_match, traverse_bfs, traverse_dfs
-from common_func import get_latest_file, merge_interval, check_event_mem_related, print_all_event_time, get_all_events_in_path
+from common_func import get_latest_file, merge_interval, check_event_mem_related, print_all_event_time, get_all_events_in_path, check_event_in_gpu_trace
 from profile_event import ProfileEventSlim, IdleEvent, TraceEvent
 import torch
 import json
@@ -15,8 +15,12 @@ import numpy as np
 from occupancy_calculator import CudaOccupancyCalculator
 import os
 
-INPUT_MODE_JSON=0
-INPUT_MODE_PROF=1
+from collections import deque
+
+
+INPUT_MODE_JSON = 0
+INPUT_MODE_PROF = 1
+DEFAULT_STREAM_ID = 7
 
 
 # @FindHao TODO: how about other new events?
@@ -36,13 +40,16 @@ KINETO_EVENT_ON_CPU = [
 
 USE_KINDETO_API = False
 
+
 class TorchExpert:
-    def __init__(self, input_mode=INPUT_MODE_PROF, model_name='', output_csv_file=None, profiler_folder='./logs/', log_file=None):
+    def __init__(self, input_mode=INPUT_MODE_PROF, model_name='', output_csv_file=None, profiler_folder='./logs/', log_file=None, json_trace_path=None):
         self.prof = None
-        # events_raw: the raw events from the profiler. 
+        # events_raw: the raw events from the profiler.
         self.events_raw = []
         # there could be multiple root events in the trace view
         self.event_tree_roots = []
+        # save all CUDA kernels and memory related functions
+        self.cuda_events = []
         # @deprecated
         self.events_kineto = []
         # this config is for pytorch profiler
@@ -52,8 +59,10 @@ class TorchExpert:
             "profile_folder": profiler_folder,
             "nwarmup": 3
         }
-        # json_trace: the json file of the profiling result
+        # json_trace: dict, the json trace file
         self.json_trace = None
+        # json_trace_path: str, the path of the json trace file
+        self.json_trace_path = json_trace_path
         # It is an instance of AnalysisResult
         self.analysis_result = None
         # if it is true, will do the offline analysis
@@ -68,7 +77,6 @@ class TorchExpert:
         # store the idleness analysis for now
         self.log_file = log_file
         self.start_time_ns = None
-
 
     def set_profile_config(self, activity_groups, profile_detailed, profile_folder, nwarmup):
         self.profiler_config = {
@@ -88,7 +96,6 @@ class TorchExpert:
         else:
             self.event_tree_roots = prof.profiler.kineto_results.experimental_event_tree()
             self.events_raw = list(traverse_bfs(self.event_tree_roots))
-        
 
     def profile(self, func, *args, **kwargs):
         """
@@ -106,7 +113,7 @@ class TorchExpert:
             on_trace_ready=profiler.tensorboard_trace_handler(
                 self.profiler_config["profile_folder"]),
         ) as prof:
-            iter_range=nwarmup+1
+            iter_range = nwarmup+1
             for _i in range(iter_range):
                 func(*args, **kwargs)
                 # Need to sync here to match run_one_step()'s timed run.
@@ -137,7 +144,8 @@ class TorchExpert:
             duration = events[i].start_time_ns - last_end_time_ns
             # ignore the idleness less than 0.01ms
             if duration > 0.01 * 1e6:
-                idle_events.append(IdleEvent(start_time_ns=last_end_time_ns, end_time_ns=events[i].start_time_ns, left_event=last_end_event, right_event=events[i]))
+                idle_events.append(IdleEvent(start_time_ns=last_end_time_ns,
+                                   end_time_ns=events[i].start_time_ns, left_event=last_end_event, right_event=events[i]))
             last_end_time_ns = events[i].end_time_ns
             last_end_event = events[i]
         # print_all_event_time(idle_events)
@@ -167,7 +175,8 @@ class TorchExpert:
     def get_cuda_events_from_kineto(self):
         slimevents = []
         end_time_ns = 0
-        start_time_ns = self.events_raw[0].start_us() * 1e3 if len(self.events_raw) else 0
+        start_time_ns = self.events_raw[0].start_us(
+        ) * 1e3 if len(self.events_raw) else 0
         memcpy_time = 0
         for event in self.events_raw:
             if event.device_type() == DeviceType.CUDA:
@@ -184,10 +193,12 @@ class TorchExpert:
     """
     In this function, the slim events are shadow of the raw events.
     """
+
     def get_cuda_events(self):
         slimevents = []
         end_time_ns = 0
-        start_time_ns = self.events_raw[0].start_time_ns if len(self.events_raw) else 0
+        start_time_ns = self.events_raw[0].start_time_ns if len(
+            self.events_raw) else 0
         memcpy_time = 0
         for event in self.events_raw:
             if event.tag == _EventType.Kineto:
@@ -207,11 +218,11 @@ class TorchExpert:
             else:
                 # @FindHao TODO: check other events
                 pass
-            
+
         return slimevents, start_time_ns, end_time_ns, memcpy_time
 
-
     def get_cuda_events_from_profile(self):
+        # TODO: do we still need two different functions?
         if USE_KINDETO_API:
             return self.get_cuda_events_from_kineto()
         else:
@@ -220,6 +231,7 @@ class TorchExpert:
     """
     This function is used to analyze the root causes of the idleness.
     """
+
     def analyze_idleness(self):
         for idle_event in self.idle_events:
             # the last raw CUDA event before idle
@@ -241,15 +253,18 @@ class TorchExpert:
             for i in range(2, min_len+1):
                 if all_events_left[len(all_events_left) - i] != all_events_right[len(all_events_right) - i]:
                     lca = all_events_left[len(all_events_left) - i + 1]
-                    left_raw_event_top = all_events_left[len(all_events_left) - i]
-                    right_raw_event_top = all_events_right[len(all_events_right) - i]
+                    left_raw_event_top = all_events_left[len(
+                        all_events_left) - i]
+                    right_raw_event_top = all_events_right[len(
+                        all_events_right) - i]
                     break
             assert lca is not None
-            self.analysis_result.idle_event_pairs.append((idle_event, lca, left_raw_event, left_raw_event_top, right_raw_event, right_raw_event_top))
+            self.analysis_result.idle_event_pairs.append(
+                (idle_event, lca, left_raw_event, left_raw_event_top, right_raw_event, right_raw_event_top))
 
-    def build_tree_from_json(self, json_str):
-        data = json.loads(json_str)
-        
+    def build_tree_from_json(self):
+        data = self.json_trace
+
         # Remove "ac2g" events and events with no duration and cat
         events = []
         for event in data["traceEvents"]:
@@ -266,17 +281,22 @@ class TorchExpert:
         root = TraceEvent(parent=None, **first_node)
         stack = [root]
         external_id_map = {}
-        
+
         for event in events[1:]:
             start_time = event["ts"]
             end_time = start_time + event.get("dur", 0)
-            
+
             # As the node is being added, the parent will be the last node in the stack
             current_node = TraceEvent(parent=stack[-1], **event)
-            if current_node.__dict__.get("External id", None) is not None and event["cat"] != "kernel":
-                external_id_map[current_node.__dict__["External id"]] = current_node
+            if current_node.__dict__.get("External id", None) is not None and not check_event_in_gpu_trace(event):
+                external_id_map[current_node.__dict__[
+                    "External id"]] = current_node
             # Handle kernel events differently
-            if event["cat"] == "kernel" or check_event_mem_related(event):
+            if check_event_in_gpu_trace(event):
+                stream_id = event["args"]["stream"]
+                # add stream attribute to the node
+                setattr(current_node, "stream", stream_id)
+                self.cuda_events.append(current_node)
                 ext_id = event["args"]["External id"]
                 caller_node = external_id_map.get(ext_id, None)
                 assert caller_node is not None
@@ -293,17 +313,6 @@ class TorchExpert:
                     else:
                         stack.pop()
         self.event_tree_roots.append(root)
-
-    # def find_node_by_ext_id(self, node, ext_id):
-    #     if hasattr(node, "External id") and node.__dict__["External id"] == ext_id:
-    #         return node
-    #     for child in node.children:
-    #         result = self.find_node_by_ext_id(child, ext_id)
-    #         if result:
-    #             return result
-    #     return None
-
-
 
     def analyze(self, json_path='./'):
         """
@@ -330,16 +339,53 @@ class TorchExpert:
         app_duration = end_time_ns - start_time_ns
         self.analysis_result = AnalysisResult(
             app_duration=app_duration, memcpy_time=memcpy_time, gpu_busy_time=sum_gpu_busy, model_name=self.model_name, output_csv_file=self.output_csv_file, log_file=self.log_file, start_time_ns=start_time_ns)
-        
+
         if self.input_mode == INPUT_MODE_PROF:
             self.idle_events = self.get_all_idleness(merged_slimevents)
             self.analyze_idleness()
             self.analysis_result.print_to_log()
-        else:
-            self.build_tree_from_json(json.dumps(self.json_trace))
-        
+
         # self.analysis_result.print_as_str()
         self.analysis_result.print_as_csv()
+
+    def analyze_multi_stream(self):
+        assert len(self.event_tree_roots) != 0
+        # Yueming: may need update for online analyze
+        assert len(self.event_tree_roots) == 1
+        # root should be the `PyTorch Profiler (0)`
+        root = self.event_tree_roots[0]
+        # This is for torch/benchmarks/dynamo profiling results. Need to update for normal profile trace
+        num_iter = len(root.children) // 2
+        picked_iter = num_iter // 2
+        # an actual node in the tree
+        picked_node = root.children[picked_iter]
+        # get all kernels in aside streams. is it always correct to assume the default stream is 7?
+        # tmp_cuda_events = self.cuda_events.copy()
+        tmp_cuda_events = []
+        queue = deque([picked_node])
+        while queue:
+            node = queue.popleft()
+            if check_event_in_gpu_trace(node.__dict__):
+                tmp_cuda_events.append(node)
+            for child in node.children:
+                queue.append(child)
+        tmp_cuda_events.sort(key=lambda x: x.ts)
+        non_overlapping_kernels = []
+        for i, current_event in enumerate(tmp_cuda_events[:-1]):
+            # Check if it's not in DEFAULT_STREAM_ID.
+            if current_event.stream != DEFAULT_STREAM_ID:
+                next_event = tmp_cuda_events[i+1]
+                # Check if they are not overlapping.
+                if (next_event.ts >= (current_event.ts + current_event.dur)):
+                    non_overlapping_kernels.append(current_event)
+                elif (next_event.stream != DEFAULT_STREAM_ID):
+                    non_overlapping_kernels.append(next_event)
+        non_overlapping_kernels_ordered_set = []
+        for event in non_overlapping_kernels:
+            if event not in non_overlapping_kernels_ordered_set:
+                non_overlapping_kernels_ordered_set.append(event)
+        print("non_overlapping_kernels_ordered_set: ",
+              non_overlapping_kernels_ordered_set)
 
     def load_json(self, json_path):
         """
@@ -376,30 +422,51 @@ class TorchExpert:
                 block_size = np.prod(event['args']['block'])
                 reg_per_thread = event['args']['registers per thread']
                 smem = event['args'].get('shared memory', 0)
-                self.occup_calc.set_inputs(block_size, reg_per_thread, "8.0", smem)
+                self.occup_calc.set_inputs(
+                    block_size, reg_per_thread, "8.0", smem)
                 occupancy = self.occup_calc.occupancyOfMultiprocessor()
-                occupancy_in_trace = event['args'].get('est. achieved occupancy %', 0)
+                occupancy_in_trace = event['args'].get(
+                    'est. achieved occupancy %', 0)
                 # if occupancy*100 !gccgjudnvkdcghjcetthjvkeggdnkggicy in the trace file: ", occupancy_in_trace)
                 kernel_occupancies.append(occupancy*duration)
                 sum_duration += duration
-                
+
         # print("kernel_occupancies: ", kernel_occupancies)
-        avg_occupancy = sum(kernel_occupancies)/sum_duration * 100 if sum_duration > 0 else 0
+        avg_occupancy = sum(kernel_occupancies) / \
+            sum_duration * 100 if sum_duration > 0 else 0
         return avg_occupancy
+
+
+def analyze_multi_report(te_single, te_multi):
+    te_single.load_json(te_single.json_trace_path)
+    te_single.build_tree_from_json()
+    te_multi.load_json(te_multi.json_trace_path)
+    te_multi.build_tree_from_json()
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-i","--input", type=str, default='./', help="The path of the json file or the path containing the json files. If you specify a path, torchexpert will search for the latest json file in that path.")
-    parser.add_argument('--optimied', type=str, help="the optimied trace file")
-    parser.add_argument('-m', "--model_name", type=str, help="the name of the model")
-    parser.add_argument('-o', "--output_csv_file", type=str, default='analysis_result.csv', help="the name of the output csv file")
-    parser.add_argument("--log_file", type=str, default='torchexpert.log', help="the log file to save the idleness analysis results")
+    parser.add_argument("-i", "--input", type=str, default='./',
+                        help="The path of the json file or the path containing the json files. If you specify a path, torchexpert will search for the latest json file in that path.")
+    parser.add_argument('--multistream', type=str,
+                        help="the trace file enabled multi-stream")
+    parser.add_argument('-m', "--model_name", type=str,
+                        help="the name of the model")
+    parser.add_argument('-o', "--output_csv_file", type=str,
+                        default='analysis_result.csv', help="the name of the output csv file")
+    parser.add_argument("--log_file", type=str, default='torchexpert.log',
+                        help="the log file to save the idleness analysis results")
     args = parser.parse_args()
-    torchexpert = TorchExpert(model_name=args.model_name, output_csv_file=args.output_csv_file, input_mode=INPUT_MODE_JSON, log_file=args.log_file)
-    if args.optimied is None:
-        torchexpert.analyze(args.input)
+    torchexpert = TorchExpert(model_name=args.model_name, output_csv_file=args.output_csv_file,
+                              input_mode=INPUT_MODE_JSON, log_file=args.log_file, json_trace_path=args.input)
+    if args.multistream is None:
+        # torchexpert.analyze(args.input)
+        torchexpert.load_json(args.input)
+        torchexpert.build_tree_from_json()
+        torchexpert.analyze_multi_stream()
+
     else:
         # this mode is used to analyze the difference between the optimized trace and the original trace. So we need another torchexpert instance.
-        torchexpert_opt = TorchExpert(model_name=args.model_name, output_csv_file=args.output_csv_file, input_mode=INPUT_MODE_JSON, log_file=args.log_file)
-        
-    
+        torchexpert_opt = TorchExpert(model_name=args.model_name, output_csv_file=args.output_csv_file,
+                                      input_mode=INPUT_MODE_JSON, log_file=args.log_file, json_trace_path=args.multistream)
+        analyze_multi_report(torchexpert, torchexpert_opt)

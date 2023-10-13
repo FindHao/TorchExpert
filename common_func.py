@@ -56,13 +56,16 @@ def get_latest_file(path):
     latest_file = max(list_of_files, key=os.path.getctime)
     return latest_file
 
+standard_mem_cat = ['gpu_memcpy', 'gpu_memset', 'memcpy', 'memset']
 def check_event_mem_related(event):
     category = event.get('cat', '').lower()
     # old trace format use 'memcpy and memset' as category
-    if category in ['gpu_memcpy', 'gpu_memset', 'memcpy', 'memset']:
-        return True
-    else:
-        return False
+    return category in standard_mem_cat
+
+standard_cat = ['gpu_memcpy', 'gpu_memset', 'memcpy', 'memset', 'kernel']
+def check_event_in_gpu_trace(event):
+    category = event.get('cat', '').lower()
+    return category in standard_cat
 
 """
 Args:
