@@ -276,7 +276,7 @@ class TorchExpert:
             if current_node.__dict__.get("External id", None) is not None and event["cat"] != "kernel":
                 external_id_map[current_node.__dict__["External id"]] = current_node
             # Handle kernel events differently
-            if event["cat"] == "kernel":
+            if event["cat"] == "kernel" or check_event_mem_related(event):
                 ext_id = event["args"]["External id"]
                 caller_node = external_id_map.get(ext_id, None)
                 assert caller_node is not None
