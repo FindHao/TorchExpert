@@ -45,26 +45,16 @@ class IdleEvent:
 
 class TraceEvent:
     """
-    A class to store the trace event.
+    A class to store the trace event. A trace event is an event in the original trace file.
     """
-    def __init__(self, tmp_dict=None) -> None:
-        if tmp_dict is not None:
-            self.name = tmp_dict["name"]
-            self.ph = tmp_dict["ph"]
-            self.pid = tmp_dict["pid"]
-            self.tid = tmp_dict["tid"]
-            self.start_time = tmp_dict["ts"]
-            self.duration = tmp_dict["dur"]
-            self.args = tmp_dict["args"]
-        else:
-            self.name = None
-            self.ph = None
-            self.pid = None
-            self.tid = None
-            self.start_time = None
-            self.duration = None
-            self.args = None
-
+    def __init__(self, parent=None, **entries):
+        self.parent = parent
+        self.children = []
+        # Dynamically set attributes for the instance
+        self.__dict__.update(entries)
+        if "args" in entries:
+            for key, value in entries["args"].items():
+                setattr(self, key, value)
 
 class Shadow_ProfilerEvent:
     """

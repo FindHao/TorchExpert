@@ -7,7 +7,7 @@ from torch._C._profiler import (_ProfilerEvent, _ExtraFields_TorchOp,
                                 _EventType)
 from torch.profiler._utils import index_of_first_match, traverse_bfs, traverse_dfs
 from common_func import get_latest_file, merge_interval, check_event_mem_related, print_all_event_time, get_all_events_in_path
-from profile_event import ProfileEventSlim, IdleEvent
+from profile_event import ProfileEventSlim, IdleEvent, TraceEvent
 import torch
 import json
 from analysis_result import AnalysisResult
@@ -247,6 +247,63 @@ class TorchExpert:
             assert lca is not None
             self.analysis_result.idle_event_pairs.append((idle_event, lca, left_raw_event, left_raw_event_top, right_raw_event, right_raw_event_top))
 
+    def build_tree_from_json(self, json_str):
+        data = json.loads(json_str)
+        
+        # Remove "ac2g" events and events with no duration and cat
+        events = []
+        for event in data["traceEvents"]:
+            if event.get("dur", 0) == 0 or event.get("cat", "") == "":
+                continue
+            if event["cat"] == "ac2g":
+                continue
+            events.append(event)
+        # Sort events based on timestamp
+        events.sort(key=lambda x: x["ts"])
+
+        first_node = events[0]
+        assert first_node['tid'] == 'PyTorch Profiler'
+        root = TraceEvent(parent=None, **first_node)
+        stack = [root]
+        external_id_map = {}
+        
+        for event in events[1:]:
+            start_time = event["ts"]
+            end_time = start_time + event.get("dur", 0)
+            
+            # As the node is being added, the parent will be the last node in the stack
+            current_node = TraceEvent(parent=stack[-1], **event)
+            if current_node.__dict__.get("External id", None) is not None and event["cat"] != "kernel":
+                external_id_map[current_node.__dict__["External id"]] = current_node
+            # Handle kernel events differently
+            if event["cat"] == "kernel":
+                ext_id = event["args"]["External id"]
+                caller_node = external_id_map.get(ext_id, None)
+                assert caller_node is not None
+                if caller_node:
+                    caller_node.children.append(current_node)
+                    current_node.parent = caller_node
+            else:
+                while stack:
+                    if stack[-1].ts <= start_time and (stack[-1].ts + stack[-1].__dict__.get("dur", 0)) >= end_time:
+                        stack[-1].children.append(current_node)
+                        current_node.parent = stack[-1]
+                        stack.append(current_node)
+                        break
+                    else:
+                        stack.pop()
+        self.event_tree_roots.append(root)
+
+    # def find_node_by_ext_id(self, node, ext_id):
+    #     if hasattr(node, "External id") and node.__dict__["External id"] == ext_id:
+    #         return node
+    #     for child in node.children:
+    #         result = self.find_node_by_ext_id(child, ext_id)
+    #         if result:
+    #             return result
+    #     return None
+
+
 
     def analyze(self, json_path='./'):
         """
@@ -258,6 +315,7 @@ class TorchExpert:
             slimevents, start_time_ns, end_time_ns, memcpy_time = self.get_events_from_json()
         else:
             slimevents, start_time_ns, end_time_ns, memcpy_time = self.get_cuda_events_from_profile()
+        slimevents, start_time_ns, end_time_ns, memcpy_time
         merged_slimevents = merge_interval(slimevents)
         sum_gpu_busy = 0
         for slimevent in merged_slimevents:
@@ -272,10 +330,14 @@ class TorchExpert:
         app_duration = end_time_ns - start_time_ns
         self.analysis_result = AnalysisResult(
             app_duration=app_duration, memcpy_time=memcpy_time, gpu_busy_time=sum_gpu_busy, model_name=self.model_name, output_csv_file=self.output_csv_file, log_file=self.log_file, start_time_ns=start_time_ns)
+        
         if self.input_mode == INPUT_MODE_PROF:
             self.idle_events = self.get_all_idleness(merged_slimevents)
             self.analyze_idleness()
             self.analysis_result.print_to_log()
+        else:
+            self.build_tree_from_json(json.dumps(self.json_trace))
+        
         # self.analysis_result.print_as_str()
         self.analysis_result.print_as_csv()
 
@@ -328,10 +390,16 @@ class TorchExpert:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-i","--input", type=str, default='./', help="The path of the json file or the path containing the json files. If you specify a path, torchexpert will search for the latest json file in that path.")
+    parser.add_argument('--optimied', type=str, help="the optimied trace file")
     parser.add_argument('-m', "--model_name", type=str, help="the name of the model")
     parser.add_argument('-o', "--output_csv_file", type=str, default='analysis_result.csv', help="the name of the output csv file")
     parser.add_argument("--log_file", type=str, default='torchexpert.log', help="the log file to save the idleness analysis results")
     args = parser.parse_args()
     torchexpert = TorchExpert(model_name=args.model_name, output_csv_file=args.output_csv_file, input_mode=INPUT_MODE_JSON, log_file=args.log_file)
-    torchexpert.analyze(args.input)
+    if args.optimied is None:
+        torchexpert.analyze(args.input)
+    else:
+        # this mode is used to analyze the difference between the optimized trace and the original trace. So we need another torchexpert instance.
+        torchexpert_opt = TorchExpert(model_name=args.model_name, output_csv_file=args.output_csv_file, input_mode=INPUT_MODE_JSON, log_file=args.log_file)
+        
     
