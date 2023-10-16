@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+from typing import List
 from torch import profiler
 from torch._C._autograd import DeviceType
 from torch._C._profiler import (_ProfilerEvent, _ExtraFields_TorchOp,
@@ -16,6 +17,7 @@ from occupancy_calculator import CudaOccupancyCalculator
 import os
 
 from collections import deque
+from stream_assign import AllGraphs
 
 
 INPUT_MODE_JSON = 0
@@ -77,6 +79,10 @@ class TorchExpert:
         # store the idleness analysis for now
         self.log_file = log_file
         self.start_time_ns = None
+        # saved all graphs collected from stream_assignment.json.
+        self.all_graphs = None
+        # it saves the events in aside streams but don't have overlapping with other events
+        self.non_overlapping_kernels_ordered_set = []
 
     def set_profile_config(self, activity_groups, profile_detailed, profile_folder, nwarmup):
         self.profiler_config = {
@@ -126,7 +132,7 @@ class TorchExpert:
         #     sort_by="cpu_time_total", row_limit=30))
         self.set_profile(prof)
 
-    def get_all_idleness(self, events: list[ProfileEventSlim]):
+    def get_all_idleness(self, events: List[ProfileEventSlim]):
         """
         This function is used to get the idleness of the events.
         Args:
@@ -190,11 +196,10 @@ class TorchExpert:
                     memcpy_time += event.duration_us() * 1e3
         return slimevents, start_time_ns, end_time_ns, memcpy_time
 
-    """
-    In this function, the slim events are shadow of the raw events.
-    """
-
     def get_cuda_events(self):
+        """
+        In this function, the slim events are shadow of the raw events.
+        """
         slimevents = []
         end_time_ns = 0
         start_time_ns = self.events_raw[0].start_time_ns if len(
@@ -228,11 +233,10 @@ class TorchExpert:
         else:
             return self.get_cuda_events()
 
-    """
-    This function is used to analyze the root causes of the idleness.
-    """
-
     def analyze_idleness(self):
+        """
+        This function is used to analyze the root causes of the idleness.
+        """
         for idle_event in self.idle_events:
             # the last raw CUDA event before idle
             left_raw_event = idle_event.left_event.include_events[-1]
@@ -380,12 +384,13 @@ class TorchExpert:
                     non_overlapping_kernels.append(current_event)
                 elif (next_event.stream != DEFAULT_STREAM_ID):
                     non_overlapping_kernels.append(next_event)
-        non_overlapping_kernels_ordered_set = []
+
         for event in non_overlapping_kernels:
-            if event not in non_overlapping_kernels_ordered_set:
-                non_overlapping_kernels_ordered_set.append(event)
-        print("non_overlapping_kernels_ordered_set: ",
-              non_overlapping_kernels_ordered_set)
+            if event not in self.non_overlapping_kernels_ordered_set:
+                self.non_overlapping_kernels_ordered_set.append(event)
+
+        # print("non_overlapping_kernels_ordered_set: ",
+        #       non_overlapping_kernels_ordered_set)
 
     def load_json(self, json_path):
         """
@@ -406,6 +411,9 @@ class TorchExpert:
             self.model_name = os.path.basename(json_file).split('.')[0]
         with open(json_file, "r") as f:
             self.json_trace = json.load(f)
+
+    def build_all_graphs(self, json_path):
+        self.all_graphs = AllGraphs(json_path)
 
     def get_avg_kernel_occupancy(self):
         """
@@ -436,12 +444,11 @@ class TorchExpert:
             sum_duration * 100 if sum_duration > 0 else 0
         return avg_occupancy
 
-
-def analyze_multi_report(te_single, te_multi):
-    te_single.load_json(te_single.json_trace_path)
-    te_single.build_tree_from_json()
-    te_multi.load_json(te_multi.json_trace_path)
-    te_multi.build_tree_from_json()
+# def analyze_multi_report(te_single, te_multi):
+#     te_single.load_json(te_single.json_trace_path)
+#     te_single.build_tree_from_json()
+#     te_multi.load_json(te_multi.json_trace_path)
+#     te_multi.build_tree_from_json()
 
 
 if __name__ == "__main__":
@@ -452,6 +459,8 @@ if __name__ == "__main__":
                         help="the trace file enabled multi-stream")
     parser.add_argument('-m', "--model_name", type=str,
                         help="the name of the model")
+    parser.add_argument('-s', "--stream_assignment", type=str,
+                        help="the json file saved stream assignment")
     parser.add_argument('-o', "--output_csv_file", type=str,
                         default='analysis_result.csv', help="the name of the output csv file")
     parser.add_argument("--log_file", type=str, default='torchexpert.log',
@@ -459,14 +468,17 @@ if __name__ == "__main__":
     args = parser.parse_args()
     torchexpert = TorchExpert(model_name=args.model_name, output_csv_file=args.output_csv_file,
                               input_mode=INPUT_MODE_JSON, log_file=args.log_file, json_trace_path=args.input)
-    if args.multistream is None:
-        # torchexpert.analyze(args.input)
-        torchexpert.load_json(args.input)
-        torchexpert.build_tree_from_json()
-        torchexpert.analyze_multi_stream()
+    # disable the idleness analysis temporarily for multi-stream analysis
+    # torchexpert.analyze(args.input)
+    torchexpert.load_json(args.input)
+    torchexpert.build_tree_from_json()
+    if args.stream_assignment is not None:
+        torchexpert.build_all_graphs(args.stream_assignment)
+        torchexpert.all_graphs.print_streams()
+    torchexpert.analyze_multi_stream()
 
-    else:
-        # this mode is used to analyze the difference between the optimized trace and the original trace. So we need another torchexpert instance.
-        torchexpert_opt = TorchExpert(model_name=args.model_name, output_csv_file=args.output_csv_file,
-                                      input_mode=INPUT_MODE_JSON, log_file=args.log_file, json_trace_path=args.multistream)
-        analyze_multi_report(torchexpert, torchexpert_opt)
+    # else:
+    #     # this mode is used to analyze the difference between the optimized trace and the original trace. So we need another torchexpert instance.
+    #     torchexpert_opt = TorchExpert(model_name=args.model_name, output_csv_file=args.output_csv_file,
+    #                                   input_mode=INPUT_MODE_JSON, log_file=args.log_file, json_trace_path=args.multistream)
+    #     analyze_multi_report(torchexpert, torchexpert_opt)
