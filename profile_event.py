@@ -50,6 +50,8 @@ class TraceEvent:
     def __init__(self, parent=None, **entries):
         self.parent = parent
         self.children = []
+        # ansestor is used to merge the trace events having same ansestor like `aten::add` when we check the stream assignment.
+        self.ansestor = None
         # Dynamically set attributes for the instance
         self.__dict__.update(entries)
         if "args" in entries:
