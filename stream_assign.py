@@ -56,3 +56,17 @@ class AllGraphs:
             print("Graph: {}".format(graph_name))
             for stream_id, node_names in graph.stream_assignment.items():
                 print("Stream {}: {}".format(stream_id, node_names))
+
+    def export_graphs(self, export_json_path):
+        print("Exporting graphs to {}".format(export_json_path))
+        content = {}
+        for graph_name, graph in self.graphs.items():
+            content[graph_name] = {}
+            for node in graph.ssnodes:
+                content[graph_name][node.name] = {
+                    "successors": node.successors,
+                    "predecessors": node.predecessors,
+                    "stream_id": node.stream_id
+                }
+        with open(export_json_path, "w") as f:
+            json.dump(content, f)
