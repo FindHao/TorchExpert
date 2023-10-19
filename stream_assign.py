@@ -27,6 +27,10 @@ class SSGraph:
         for node_name in order:
             self.ssnodes.append(all_nodes[node_name])
             self.name_mapping[node_name] = all_nodes[node_name]
+            # mapping each buf in buf82_buf83_buf87 to the same node
+            if node_name.find("_"):
+                for sub_node_name in node_name.split("_"):
+                    self.name_mapping[sub_node_name] = all_nodes[node_name]
     
     def analyze_stream(self):
         for node in self.ssnodes:

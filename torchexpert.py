@@ -45,6 +45,7 @@ KINETO_EVENT_ON_CPU = [
 
 USE_KINDETO_API = False
 
+buf_reg = re.compile(r'buf(\d+)')
 
 class TorchExpert:
     def __init__(self, input_mode=INPUT_MODE_PROF, model_name='', output_csv_file=None, profiler_folder='./logs/', log_file=None, json_trace_path=None):
@@ -401,98 +402,37 @@ class TorchExpert:
     def update_stream_assignment(self, export_graph_path):
         """Compare the stream assignment collected from the trace file and stream_assignment.json. Update the assigment doesn't bring any benefit in stream_assignment.json.
         """
-        def check_one_graph(picked_events, ssgraph):
-            picked_events_stream_assignment = {}
-            # in profiler trace, the stream id starts from some random number, so we need to reassign the stream id starting from 1 to match the stream assignment in stream_assignment.json. 
-            # need to convert the stream ids in profiler trace to ids starting from 1
-            launch_order_2_stream_id_trace = []
-            for event in picked_events:
-                # ignore stream 0
-                if event.stream == DEFAULT_STREAM_ID:
+        def check_one_graph(tid, ssgraph):
+            # update stream assignment
+            for event in self.non_overlapping_kernels_ordered_list:
+                if event.parent.tid != tid:
                     continue
-                else:
-                    if not event.stream in launch_order_2_stream_id_trace:
-                        launch_order_2_stream_id_trace.append(event.stream)
-                # find its ansestor
-                tmp_ansestor = event
-                while(tmp_ansestor.parent.name not in ['actual', 'CompiledFunction', 'CompiledFunctionBackward']):
-                    tmp_ansestor = tmp_ansestor.parent
-                event.ansestor = tmp_ansestor
-                # because one node could launch multiple kernels, we need to group them by their ansestor
-                if event.stream not in picked_events_stream_assignment:
-                    picked_events_stream_assignment[event.stream] = []
-                    tmp_list = [event]
-                    # note: append a list to a list. it will help whem we merge events in the same ansestor
-                    picked_events_stream_assignment[event.stream].append(tmp_list)
-                else:
-                    for tmp_list in picked_events_stream_assignment[event.stream]:
-                        found = False
-                        for tmp_event in tmp_list:
-                            if tmp_event.ansestor == event.ansestor:
-                                tmp_list.append(event)
-                                found = True
-                                break
-                        if found:
-                            break
-                    else:
-                        tmp_list = [event]
-                        picked_events_stream_assignment[event.stream].append(tmp_list)
-            # check fingerprint of two kinds of stream assignment. the ssgraph.stream_assignment includes the default stream 0.
-            assert len(picked_events_stream_assignment) == (len(ssgraph.stream_assignment) - 1)
-            launch_order_2_stream_id_json = []
-            for node in ssgraph.ssnodes:
-                if node.stream_id != DEFAULT_STREAM_ID_JSON and node.stream_id not in launch_order_2_stream_id_json:
-                    launch_order_2_stream_id_json.append(node.stream_id)
-            
-            assert len(launch_order_2_stream_id_trace) == len(launch_order_2_stream_id_json)
-            new_dict = {}
-            # {stream_id_in_trace: stream_id_in_json, }
-            stream_id_mapping = {}
-            for i, stream_id in enumerate(launch_order_2_stream_id_trace):
-                stream_id_mapping[stream_id] = launch_order_2_stream_id_json[i]
-                new_dict[launch_order_2_stream_id_json[i]] = picked_events_stream_assignment[stream_id]
-            new_dict = dict(sorted(new_dict.items(), key=lambda x: x[0]))
-            picked_events_stream_assignment_newid = new_dict
-            unmatched_stream_ids = set()
-            for stream_id, events in picked_events_stream_assignment_newid.items():
-                # assert len(events) == len(ssgraph.stream_assignment[stream_id])
-                if len(events) != len(ssgraph.stream_assignment[stream_id]):
-                    unmatched_stream_ids.add(stream_id)
-            if unmatched_stream_ids:
-                print(f"Warning: the number of kernels in stream {unmatched_stream_ids} is not equal to the number of kernels in stream_assignment.json.")
-                return False
-            else:
-                # update stream assignment
-                for event in self.non_overlapping_kernels_ordered_list:
-                    if event in picked_events:
-                        new_stream_id = stream_id_mapping[event.stream]
-                        for i, tmp_list in enumerate(picked_events_stream_assignment_newid[new_stream_id]):
-                            if event in tmp_list:
-                                cor_ssnode = ssgraph.name_mapping[ssgraph.stream_assignment[new_stream_id][i]]
-                                target_stream = 0
-                                if len(cor_ssnode.predecessors) != 0:
-                                    first_predecessor = ssgraph.name_mapping[cor_ssnode.predecessors[0]]
-                                    target_stream = first_predecessor.stream_id
-                                print(f"Node {cor_ssnode.name}'s stream has been changed from {cor_ssnode.stream_id} to {target_stream}.")
-                                cor_ssnode.stream_id = target_stream
-                                break
-                        else:
-                            raise Exception("Can't find the event in the picked_events_stream_assignment_newid.")
-                return True
-
-        events_forward = []
-        events_backward = []
+                parent = event
+                found = False
+                while(not parent.name.startswith("CompiledFunction")):
+                    match = buf_reg.match(parent.name)
+                    if match:
+                        buf_id = int(match.group(1))
+                        ssnode = ssgraph.name_mapping[parent.name]
+                        target_stream = DEFAULT_STREAM_ID_JSON
+                        if len(ssnode.predecessors) != 0:
+                            first_predecessor = ssgraph.name_mapping[ssnode.predecessors[0]]
+                            target_stream = first_predecessor.stream_id
+                        print(f"Node {ssnode.name}'s stream has been changed from {ssnode.stream_id} to {target_stream}.")
+                        # update stream assignment
+                        ssnode.stream_id = target_stream
+                        found = True
+                        break
+                    parent = parent.parent
+                if not found:
+                    print(f"Can't find the corresponding ssnode for event(ts {event.ts})")
         thread_ids = set()
         for event in self.picked_cuda_events:
             parent_event_tid = event.parent.tid
             thread_ids.add(parent_event_tid)
         assert len(thread_ids) == 2
-        min_tid = min(thread_ids) # forward
-        for event in self.picked_cuda_events:
-            if event.parent.tid == min_tid:
-                events_forward.append(event)
-            else:
-                events_backward.append(event)
+        forward_tid = min(thread_ids) # forward
+        backward_tid = max(thread_ids) # backward
         graph_names = self.all_graphs.graphs.keys()
         reg = re.compile(r'graph_(\d+)')
         graph_ids = []
@@ -503,18 +443,15 @@ class TorchExpert:
         assert len(graph_ids) == 2
         forward_graph = self.all_graphs.graphs['graph_{}'.format(min(graph_ids))]
         backward_graph = self.all_graphs.graphs['graph_{}'.format(max(graph_ids))]
-        check_one_graph(events_forward, forward_graph)
-        print("forwars phase is correct.")
-        check_one_graph(events_backward, backward_graph)
-        print("backward phase is correct.")
+        check_one_graph(forward_tid, forward_graph)
+        print("forward phase finished.")
+        check_one_graph(backward_tid, backward_graph)
+        print("backward phase finished.")
         if export_graph_path is not None:
             parent_folder_path = os.path.dirname(export_graph_path)
             if not os.path.exists(parent_folder_path):
                 os.makedirs(parent_folder_path)
             self.all_graphs.export_graphs(export_graph_path)
-
-
-        
 
     def load_json(self, json_path):
         """
