@@ -24,6 +24,8 @@ INPUT_MODE_JSON = 0
 INPUT_MODE_PROF = 1
 # the default stream id in pytorch profiler is 7, not 0.
 DEFAULT_STREAM_ID = 7
+# the default stream id in stream assignment json is 0.
+DEFAULT_STREAM_ID_JSON = 0
 
 
 # @FindHao TODO: how about other new events?
@@ -401,10 +403,16 @@ class TorchExpert:
         """
         def check_one_graph(picked_events, ssgraph):
             picked_events_stream_assignment = {}
+            # in profiler trace, the stream id starts from some random number, so we need to reassign the stream id starting from 1 to match the stream assignment in stream_assignment.json. 
+            # need to convert the stream ids in profiler trace to ids starting from 1
+            launch_order_2_stream_id_trace = []
             for event in picked_events:
                 # ignore stream 0
                 if event.stream == DEFAULT_STREAM_ID:
                     continue
+                else:
+                    if not event.stream in launch_order_2_stream_id_trace:
+                        launch_order_2_stream_id_trace.append(event.stream)
                 # find its ansestor
                 tmp_ansestor = event
                 while(tmp_ansestor.parent.name not in ['actual', 'CompiledFunction', 'CompiledFunctionBackward']):
@@ -431,14 +439,19 @@ class TorchExpert:
                         picked_events_stream_assignment[event.stream].append(tmp_list)
             # check fingerprint of two kinds of stream assignment. the ssgraph.stream_assignment includes the default stream 0.
             assert len(picked_events_stream_assignment) == (len(ssgraph.stream_assignment) - 1)
-            # in profiler trace, the stream id starts from some random number, so we need to reassign the stream id starting from 1 to match the stream assignment in stream_assignment.json. 
+            launch_order_2_stream_id_json = []
+            for node in ssgraph.ssnodes:
+                if node.stream_id != DEFAULT_STREAM_ID_JSON and node.stream_id not in launch_order_2_stream_id_json:
+                    launch_order_2_stream_id_json.append(node.stream_id)
+            
+            assert len(launch_order_2_stream_id_trace) == len(launch_order_2_stream_id_json)
             new_dict = {}
-            # need to convert the stream ids in profiler trace to ids starting from 1
+            # {stream_id_in_trace: stream_id_in_json, }
             stream_id_mapping = {}
-            picked_events_stream_assignment = dict(sorted(picked_events_stream_assignment.items()))
-            for i, key in enumerate(picked_events_stream_assignment.keys()):
-                new_dict[i+1] = picked_events_stream_assignment[key]
-                stream_id_mapping[key] = i+1
+            for i, stream_id in enumerate(launch_order_2_stream_id_trace):
+                stream_id_mapping[stream_id] = launch_order_2_stream_id_json[i]
+                new_dict[launch_order_2_stream_id_json[i]] = picked_events_stream_assignment[stream_id]
+            new_dict = dict(sorted(new_dict.items(), key=lambda x: x[0]))
             picked_events_stream_assignment_newid = new_dict
             unmatched_stream_ids = set()
             for stream_id, events in picked_events_stream_assignment_newid.items():
@@ -491,7 +504,9 @@ class TorchExpert:
         forward_graph = self.all_graphs.graphs['graph_{}'.format(min(graph_ids))]
         backward_graph = self.all_graphs.graphs['graph_{}'.format(max(graph_ids))]
         check_one_graph(events_forward, forward_graph)
+        print("forwars phase is correct.")
         check_one_graph(events_backward, backward_graph)
+        print("backward phase is correct.")
         if export_graph_path is not None:
             parent_folder_path = os.path.dirname(export_graph_path)
             if not os.path.exists(parent_folder_path):
