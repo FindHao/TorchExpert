@@ -30,6 +30,8 @@ DEFAULT_STREAM_ID_JSON = 0
 # add logger
 import logging
 logger = logging.getLogger(__name__)
+# set logger level to info
+logger.setLevel(logging.INFO)
 
 # @FindHao TODO: how about other new events?
 KINETO_EVENT_ON_CPU = [
@@ -403,62 +405,82 @@ class TorchExpert:
                 self.non_overlapping_kernels_ordered_list.append(event)
         assert self.all_graphs is not None
         
-    def update_stream_assignment(self, export_graph_path):
-        """Compare the stream assignment collected from the trace file and stream_assignment.json. Update the assigment doesn't bring any benefit in stream_assignment.json.
+    def get_predecessor_stream(self, ssnode, ssgraph, tid):
+        """Get the predecessor's stream id. There are some cases that the predecessors are abnormal nodes. For example, buf12->buf13->buf14 while buf13 is an assert_size node. Then, buf13 will not appear in the trace file and no GPU kernels generated. In this case, we need to find the stream id of buf12. More complicated cases are possible such as multiple predecessors.
         """
-        def get_predecessor_stream(ssnode, ssgraph, tid):
-            target_stream = -1
-            if len(ssnode.predecessors) != 0:
-                found = False
-                for predecessor_name in ssnode.predecessors:
-                    predecessor = ssgraph.name_mapping[predecessor_name]
-                    if predecessor.stream_id == DEFAULT_STREAM_ID_JSON:
-                        target_stream = DEFAULT_STREAM_ID_JSON
+        target_stream = -1
+        if len(ssnode.predecessors) != 0:
+            found = False
+            for predecessor_name in ssnode.predecessors:
+                predecessor = ssgraph.name_mapping[predecessor_name]
+                if predecessor.stream_id == DEFAULT_STREAM_ID_JSON:
+                    target_stream = DEFAULT_STREAM_ID_JSON
+                    found = True
+                    break
+                else:
+                    if predecessor.name in self.stream_assigned_in_trace[tid]:
+                        target_stream = predecessor.stream_id
                         found = True
                         break
                     else:
-                        if predecessor.name in self.stream_assigned_in_trace[tid]:
-                            target_stream = predecessor.stream_id
-                            found = True
-                            break
-                        else:
-                            # the predecessor is a fake node
-                            continue
-                if not found:
-                    for predecessor_name in ssnode.predecessors:
-                        predecessor = ssgraph.name_mapping[predecessor_name]
-                        search_result = get_predecessor_stream(predecessor, ssgraph, tid)
-                        if search_result != -1:
-                            found = True
-                            target_stream = search_result
-            else:
-                target_stream = DEFAULT_STREAM_ID_JSON
-            return target_stream
-            
-        def check_one_graph(tid, ssgraph):
-            updated_nodes = set()
-            # update stream assignment
-            for event in self.non_overlapping_kernels_ordered_list:
-                if event.parent.tid != tid:
-                    continue
-                parent = event
-                found = False
-                while(not parent.name.startswith("CompiledFunction")):
-                    match = buf_reg.match(parent.name)
-                    if match:
-                        ssnode = ssgraph.name_mapping[parent.name]
-                        target_stream = get_predecessor_stream(ssnode, ssgraph, tid)
-                        if target_stream == -1 or (target_stream == ssnode.stream_id and ssnode.name not in updated_nodes):
-                            raise Exception(f"Can't find a better stream assignment for node {ssnode.name}. current result: {ssnode.stream_id} -> {target_stream}")
-                        updated_nodes.add(ssnode.name)
-                        print(f"Node {ssnode.name}'s stream has been changed from {ssnode.stream_id} to {target_stream}.")
-                        # update stream assignment
-                        ssnode.stream_id = target_stream
+                        # the predecessor is an empty node such as assert_size
+                        continue
+            if not found:
+                for predecessor_name in ssnode.predecessors:
+                    predecessor = ssgraph.name_mapping[predecessor_name]
+                    search_result = self.get_predecessor_stream(predecessor, ssgraph, tid)
+                    if search_result != -1:
                         found = True
-                        break
-                    parent = parent.parent
-                if not found:
-                    print(f"Can't find the corresponding ssnode for event(ts {event.ts})")
+                        target_stream = search_result
+        else:
+            target_stream = DEFAULT_STREAM_ID_JSON
+        return target_stream
+    
+    def check_one_graph(self, tid, ssgraph):
+        """update the stream assignments for kernels in non_overlapping_kernels_ordered_list.
+        """
+        updated_nodes = set()
+        # update stream assignment
+        for event in self.non_overlapping_kernels_ordered_list:
+            if event.parent.tid != tid:
+                continue
+            parent = event
+            found = False
+            while(not parent.name.startswith("CompiledFunction")):
+                match = buf_reg.match(parent.name)
+                if match:
+                    ssnode = ssgraph.name_mapping[parent.name]
+                    target_stream = self.get_predecessor_stream(ssnode, ssgraph, tid)
+                    if target_stream == -1 or (target_stream == ssnode.stream_id and ssnode.name not in updated_nodes):
+                        raise Exception(f"Can't find a better stream assignment for node {ssnode.name}. current result: {ssnode.stream_id} -> {target_stream}")
+                    updated_nodes.add(ssnode.name)
+                    print(f"Node {ssnode.name}'s stream has been changed from {ssnode.stream_id} to {target_stream}.")
+                    # update stream assignment
+                    ssnode.stream_id = target_stream
+                    found = True
+                    break
+                parent = parent.parent
+            if not found:
+                print(f"Can't find the corresponding ssnode for event(ts {event.ts})")
+        self.check_empty_nodes(tid, ssgraph)
+    
+    def check_empty_nodes(self, tid, ssgraph):
+        """This function is used to put the empty nodes to the same stream as its predecessor. 
+        """
+        for node in ssgraph.ssnodes:
+            if node.stream_id != DEFAULT_STREAM_ID_JSON and node.name not in self.stream_assigned_in_trace[tid]:
+                target_stream = self.get_predecessor_stream(node, ssgraph, tid)
+                if target_stream == -1:
+                    raise Exception(f"Can't find a better stream assignment for empty node {node.name}. current result: {node.stream_id} -> {target_stream}")
+                if target_stream == node.stream_id:
+                    logger.info(f"Empty node {node.name}'s better stream is the same as its current stream: {node.stream_id}.")
+                else:
+                    logger.info(f"Empty node {node.name}'s stream has been changed from {node.stream_id} to {target_stream}.")
+                node.stream_id = target_stream
+
+    def update_stream_assignment(self, export_graph_path):
+        """Compare the stream assignment collected from the trace file and stream_assignment.json. Update the assigment doesn't bring any benefit in stream_assignment.json.
+        """
         # there are only two threads. One for forward and one for backward.
         thread_ids = set()
         for event in self.picked_cuda_events:
@@ -503,10 +525,10 @@ class TorchExpert:
                 if not found:
                     logger.warning(f"Can't find the corresponding ssnode for event(ts {event.ts})")
 
-
-        check_one_graph(forward_tid, forward_graph)
+        self.check_one_graph(forward_tid, forward_graph)
+        
         print("forward phase finished.")
-        check_one_graph(backward_tid, backward_graph)
+        self.check_one_graph(backward_tid, backward_graph)
         print("backward phase finished.")
         if export_graph_path is not None:
             parent_folder_path = os.path.dirname(export_graph_path)
