@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import argparse
 from typing import List
 from torch import profiler
@@ -598,7 +597,7 @@ class TorchExpert:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-i", "--input", type=str, default='./',
-                        help="The path of the json file or the path containing the json files. If you specify a path, torchexpert will search for the latest json file in that path.")
+                        help="The path of the profiling trace file or the path containing the profiling trace files. If you specify a path, torchexpert will search for the latest json file in that path.")
     parser.add_argument('--multistream', type=str,
                         help="the trace file enabled multi-stream")
     parser.add_argument('-m', "--model_name", type=str,
