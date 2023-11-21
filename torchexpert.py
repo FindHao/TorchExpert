@@ -98,6 +98,8 @@ class TorchExpert:
         self.picked_cuda_events = []
         # it only saves the stream assignment of nodes in aside streams appearing in trace. Some nop node in the graph may not appear in the trace.
         self.stream_assigned_in_trace = {}
+        # it only saves the merged cuda events for self.picked_cuda_events
+        self.merged_slim_cuda_events = []
 
     def set_profile_config(self, activity_groups, profile_detailed, profile_folder, nwarmup):
         self.profiler_config = {
@@ -404,21 +406,14 @@ class TorchExpert:
                 queue.append(child)
         tmp_cuda_events.sort(key=lambda x: x.ts)
         self.picked_cuda_events = tmp_cuda_events
-        merged_slim_cuda_events = merge_interval(tmp_slim_cuda_events)
+        # merge overlapped kernels.
+        self.merged_slim_cuda_events = merge_interval(tmp_slim_cuda_events)
         non_overlapping_kernels = []
-        for slimevent in merged_slim_cuda_events:
+        for slimevent in self.merged_slim_cuda_events:
+        # since we merged all overlapped kernels to slimevents, the size of slimevent.include_events for non-overlapping kernels should be 1. We only care about the kernels in aside streams. 
+        # A buffer can generate two kernels while one kernel is overlapped but the other is not. We only care the pure non_overlapping buffers. This will be processed in next step.
             if len(slimevent.include_events) == 1 and slimevent.include_events[0].stream != DEFAULT_STREAM_ID:
                 non_overlapping_kernels.append(slimevent.include_events[0])
-        # for i, current_event in enumerate(tmp_cuda_events[:-1]):
-        #     # Check if it's not in DEFAULT_STREAM_ID.
-        #     if current_event.stream != DEFAULT_STREAM_ID:
-        #         next_event = tmp_cuda_events[i+1]
-        #         # Check if they are not overlapping.
-        #         if (next_event.ts >= (current_event.ts + current_event.dur)):
-        #             non_overlapping_kernels.append(current_event)
-        #         # TODO: it is not correct. but why I wrote so?
-        #         # elif (next_event.stream != DEFAULT_STREAM_ID):
-        #         #     non_overlapping_kernels.append(next_event)
         for event in non_overlapping_kernels:
             if event not in self.non_overlapping_kernels_ordered_list:
                 self.non_overlapping_kernels_ordered_list.append(event)
@@ -459,11 +454,53 @@ class TorchExpert:
     def check_one_graph(self, tid, ssgraph):
         """update the stream assignments for kernels in non_overlapping_kernels_ordered_list.
         """
+        # get the kernel-buffer mapping. update event.ssnode to save such relation.
+        for event in self.picked_cuda_events:
+            if event.stream == DEFAULT_STREAM_ID or event.parent.tid != tid:
+                continue
+            parent = event
+            found = False
+            while (not parent.name.startswith("CompiledFunction")):
+                match = buf_reg.match(parent.name)
+                if match:
+                    ssnode = ssgraph.name_mapping[parent.name]
+                    event.ssnode = ssnode
+                    found = True
+                    break
+                parent = parent.parent
+            if not found:
+                logger.warning(
+                    f"Can't find the corresponding ssnode for event(ts {event.ts}, {event.ts_offset})")
+        
+        # {buf1: {slimevent1, slimevent2},}, this is used to filter the fake non overlapping buffers. e.g., a buffer can generate two kernels while one kernel is overlapped but the other is not. This buffer should be marked as overlapping.
+        buffer_to_slimevents = {}
+        for slimevent in self.merged_slim_cuda_events:
+            if slimevent.include_events[0].parent.tid != tid:
+                continue
+            for event in slimevent.include_events:
+                if event.stream == DEFAULT_STREAM_ID:
+                    continue
+                if event.ssnode not in buffer_to_slimevents:
+                    buffer_to_slimevents[event.ssnode] = set()
+                buffer_to_slimevents[event.ssnode].add(slimevent)
+        # for ssnode, streams in buffer_to_slimevents.items():
+        #     if len(streams) != 1:
+        #         logger.warning(f"Buffer {ssnode.name} is shared by multiple streams: {streams}.")
         updated_nodes = set()
         # update stream assignment
         for event in self.non_overlapping_kernels_ordered_list:
             if event.parent.tid != tid:
                 continue
+            # actually, we need to update stream assignment for buffers not kernels. So, if a buffer with multiple kernels, we need to check if any kernels of this buffer have overlaps with other kernels. If yes, we need to skip this kernel.
+            slimevents = buffer_to_slimevents[event.ssnode]
+            skip = False
+            for slimevent in slimevents:
+                if len(slimevent.include_events) != 1:
+                    skip = True
+                    break
+            if skip:
+                continue
+                
             parent = event
             found = False
             while (not parent.name.startswith("CompiledFunction")):

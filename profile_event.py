@@ -62,6 +62,8 @@ class TraceEvent:
         if "args" in entries:
             for key, value in entries["args"].items():
                 setattr(self, key, value)
+        # ssnode, Stream SuperNode, is a stream graph node.
+        self.ssnode = None
 
 class Shadow_ProfilerEvent:
     """
