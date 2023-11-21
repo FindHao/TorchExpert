@@ -309,6 +309,17 @@ class TorchExpert:
             if current_node.__dict__.get("External id", None) is not None and not check_event_in_gpu_trace(event):
                 external_id_map[current_node.__dict__[
                     "External id"]] = current_node
+            # Compute ts_offset for current_node
+            offset = event['ts'] - first_node['ts']
+            # Convert the offset to hours, minutes, seconds, and microseconds
+            hours = offset // (3600 * 1000000)
+            minutes = (offset % (3600 * 1000000)) // (60 * 1000000)
+            seconds = (offset % (60 * 1000000)) // 1000000
+            microseconds = offset % 1000000
+            # Format the offset as HH:MM:SS.microseconds
+            formatted_offset = f"{hours:02d}:{minutes:02d}:{seconds:02d}.{microseconds:06d}"
+            setattr(current_node, "ts_offset", formatted_offset)
+        
             # Handle kernel events differently
             if check_event_in_gpu_trace(event):
                 stream_id = event["args"]["stream"]
@@ -330,6 +341,8 @@ class TorchExpert:
                         break
                     else:
                         stack.pop()
+        
+
         self.event_tree_roots.append(root)
 
     def analyze(self, json_path='./'):
@@ -397,8 +410,9 @@ class TorchExpert:
                 # Check if they are not overlapping.
                 if (next_event.ts >= (current_event.ts + current_event.dur)):
                     non_overlapping_kernels.append(current_event)
-                elif (next_event.stream != DEFAULT_STREAM_ID):
-                    non_overlapping_kernels.append(next_event)
+                # TODO: it is not correct. but why I wrote so?
+                # elif (next_event.stream != DEFAULT_STREAM_ID):
+                #     non_overlapping_kernels.append(next_event)
         for event in non_overlapping_kernels:
             if event not in self.non_overlapping_kernels_ordered_list:
                 self.non_overlapping_kernels_ordered_list.append(event)
