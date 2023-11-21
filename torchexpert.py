@@ -1,3 +1,4 @@
+import logging
 import argparse
 from typing import List
 from torch import profiler
@@ -27,7 +28,6 @@ DEFAULT_STREAM_ID = 7
 DEFAULT_STREAM_ID_JSON = 0
 
 # add logger
-import logging
 logger = logging.getLogger(__name__)
 # set logger level to info
 logger.setLevel(logging.INFO)
@@ -50,6 +50,7 @@ KINETO_EVENT_ON_CPU = [
 USE_KINDETO_API = False
 
 buf_reg = re.compile(r'buf(\d+)')
+
 
 class TorchExpert:
     def __init__(self, input_mode=INPUT_MODE_PROF, model_name='', output_csv_file=None, profiler_folder='./logs/', log_file=None, json_trace_path=None):
@@ -319,7 +320,7 @@ class TorchExpert:
             # Format the offset as HH:MM:SS.microseconds
             formatted_offset = f"{hours:02d}:{minutes:02d}:{seconds:02d}.{microseconds:06d}"
             setattr(current_node, "ts_offset", formatted_offset)
-        
+
             # Handle kernel events differently
             if check_event_in_gpu_trace(event):
                 stream_id = event["args"]["stream"]
@@ -341,7 +342,6 @@ class TorchExpert:
                         break
                     else:
                         stack.pop()
-        
 
         self.event_tree_roots.append(root)
 
@@ -390,34 +390,40 @@ class TorchExpert:
         picked_iter = num_iter // 2
         # an actual node in the tree
         picked_node = root.children[picked_iter]
-        # get all kernels in aside streams. is it always correct to assume the default stream is 7?
-        # tmp_cuda_events = self.cuda_events.copy()
+        # get all kernels
         tmp_cuda_events = []
+        # store the merged cuda events
+        tmp_slim_cuda_events = []
         queue = deque([picked_node])
         while queue:
             node = queue.popleft()
             if check_event_in_gpu_trace(node.__dict__):
                 tmp_cuda_events.append(node)
+                tmp_slim_cuda_events.append(ProfileEventSlim(event=node))
             for child in node.children:
                 queue.append(child)
         tmp_cuda_events.sort(key=lambda x: x.ts)
         self.picked_cuda_events = tmp_cuda_events
+        merged_slim_cuda_events = merge_interval(tmp_slim_cuda_events)
         non_overlapping_kernels = []
-        for i, current_event in enumerate(tmp_cuda_events[:-1]):
-            # Check if it's not in DEFAULT_STREAM_ID.
-            if current_event.stream != DEFAULT_STREAM_ID:
-                next_event = tmp_cuda_events[i+1]
-                # Check if they are not overlapping.
-                if (next_event.ts >= (current_event.ts + current_event.dur)):
-                    non_overlapping_kernels.append(current_event)
-                # TODO: it is not correct. but why I wrote so?
-                # elif (next_event.stream != DEFAULT_STREAM_ID):
-                #     non_overlapping_kernels.append(next_event)
+        for slimevent in merged_slim_cuda_events:
+            if len(slimevent.include_events) == 1 and slimevent.include_events[0].stream != DEFAULT_STREAM_ID:
+                non_overlapping_kernels.append(slimevent.include_events[0])
+        # for i, current_event in enumerate(tmp_cuda_events[:-1]):
+        #     # Check if it's not in DEFAULT_STREAM_ID.
+        #     if current_event.stream != DEFAULT_STREAM_ID:
+        #         next_event = tmp_cuda_events[i+1]
+        #         # Check if they are not overlapping.
+        #         if (next_event.ts >= (current_event.ts + current_event.dur)):
+        #             non_overlapping_kernels.append(current_event)
+        #         # TODO: it is not correct. but why I wrote so?
+        #         # elif (next_event.stream != DEFAULT_STREAM_ID):
+        #         #     non_overlapping_kernels.append(next_event)
         for event in non_overlapping_kernels:
             if event not in self.non_overlapping_kernels_ordered_list:
                 self.non_overlapping_kernels_ordered_list.append(event)
         assert self.all_graphs is not None
-        
+
     def get_predecessor_stream(self, ssnode, ssgraph, tid):
         """Get the predecessor's stream id. There are some cases that the predecessors are abnormal nodes. For example, buf12->buf13->buf14 while buf13 is an assert_size node. Then, buf13 will not appear in the trace file and no GPU kernels generated. In this case, we need to find the stream id of buf12. More complicated cases are possible such as multiple predecessors.
         """
@@ -441,14 +447,15 @@ class TorchExpert:
             if not found:
                 for predecessor_name in ssnode.predecessors:
                     predecessor = ssgraph.name_mapping[predecessor_name]
-                    search_result = self.get_predecessor_stream(predecessor, ssgraph, tid)
+                    search_result = self.get_predecessor_stream(
+                        predecessor, ssgraph, tid)
                     if search_result != -1:
                         found = True
                         target_stream = search_result
         else:
             target_stream = DEFAULT_STREAM_ID_JSON
         return target_stream
-    
+
     def check_one_graph(self, tid, ssgraph):
         """update the stream assignments for kernels in non_overlapping_kernels_ordered_list.
         """
@@ -459,24 +466,28 @@ class TorchExpert:
                 continue
             parent = event
             found = False
-            while(not parent.name.startswith("CompiledFunction")):
+            while (not parent.name.startswith("CompiledFunction")):
                 match = buf_reg.match(parent.name)
                 if match:
                     ssnode = ssgraph.name_mapping[parent.name]
-                    target_stream = self.get_predecessor_stream(ssnode, ssgraph, tid)
-                    if target_stream == -1 or (target_stream == ssnode.stream_id and ssnode.name not in updated_nodes):
-                        raise Exception(f"Can't find a better stream assignment for node {ssnode.name}. current result: {ssnode.stream_id} -> {target_stream}")
+                    target_stream = self.get_predecessor_stream(
+                        ssnode, ssgraph, tid)
+                    if target_stream == -1 or (target_stream == ssnode.stream_id and ssnode.name not in updated_nodes and len(ssnode.predecessors) != 1):
+                        raise Exception(
+                            f"Can't find a better stream assignment for node {ssnode.name}. current result: {ssnode.stream_id} -> {target_stream}")
                     updated_nodes.add(ssnode.name)
-                    print(f"Node {ssnode.name}'s stream has been changed from {ssnode.stream_id} to {target_stream}.")
+                    print(
+                        f"Node {ssnode.name}'s stream has been changed from {ssnode.stream_id} to {target_stream}.")
                     # update stream assignment
                     ssnode.stream_id = target_stream
                     found = True
                     break
                 parent = parent.parent
             if not found:
-                print(f"Can't find the corresponding ssnode for event(ts {event.ts})")
+                print(
+                    f"Can't find the corresponding ssnode for event(ts {event.ts})")
         self.check_empty_nodes(tid, ssgraph)
-    
+
     def check_empty_nodes(self, tid, ssgraph):
         """This function is used to put the empty nodes to the same stream as its predecessor. 
         """
@@ -484,11 +495,14 @@ class TorchExpert:
             if node.stream_id != DEFAULT_STREAM_ID_JSON and node.name not in self.stream_assigned_in_trace[tid]:
                 target_stream = self.get_predecessor_stream(node, ssgraph, tid)
                 if target_stream == -1:
-                    raise Exception(f"Can't find a better stream assignment for empty node {node.name}. current result: {node.stream_id} -> {target_stream}")
+                    raise Exception(
+                        f"Can't find a better stream assignment for empty node {node.name}. current result: {node.stream_id} -> {target_stream}")
                 if target_stream == node.stream_id:
-                    logger.info(f"Empty node {node.name}'s better stream is the same as its current stream: {node.stream_id}.")
+                    logger.info(
+                        f"Empty node {node.name}'s better stream is the same as its current stream: {node.stream_id}.")
                 else:
-                    logger.info(f"Empty node {node.name}'s stream has been changed from {node.stream_id} to {target_stream}.")
+                    logger.info(
+                        f"Empty node {node.name}'s stream has been changed from {node.stream_id} to {target_stream}.")
                 node.stream_id = target_stream
 
     def update_stream_assignment(self, export_graph_path):
@@ -500,8 +514,8 @@ class TorchExpert:
             parent_event_tid = event.parent.tid
             thread_ids.add(parent_event_tid)
         assert len(thread_ids) == 2
-        forward_tid = min(thread_ids) # forward
-        backward_tid = max(thread_ids) # backward
+        forward_tid = min(thread_ids)  # forward
+        backward_tid = max(thread_ids)  # backward
         graph_names = self.all_graphs.graphs.keys()
         reg = re.compile(r'graph_(\d+)')
         graph_ids = []
@@ -510,8 +524,10 @@ class TorchExpert:
             if match:
                 graph_ids.append(int(match.group(1)))
         assert len(graph_ids) == 2
-        forward_graph = self.all_graphs.graphs['graph_{}'.format(min(graph_ids))]
-        backward_graph = self.all_graphs.graphs['graph_{}'.format(max(graph_ids))]
+        forward_graph = self.all_graphs.graphs['graph_{}'.format(
+            min(graph_ids))]
+        backward_graph = self.all_graphs.graphs['graph_{}'.format(
+            max(graph_ids))]
 
         for event in self.picked_cuda_events:
             parent_event_tid = event.parent.tid
@@ -524,22 +540,24 @@ class TorchExpert:
                 found = False
                 parent = event
                 # dead loop possible?
-                while(not parent.name.startswith("CompiledFunction")):
+                while (not parent.name.startswith("CompiledFunction")):
                     match = buf_reg.match(parent.name)
                     if match:
                         ssnode = target_graph.name_mapping[parent.name]
                         if parent_event_tid not in self.stream_assigned_in_trace:
-                            self.stream_assigned_in_trace[parent_event_tid] = {}
+                            self.stream_assigned_in_trace[parent_event_tid] = {
+                            }
                         # use its stream_id in json rather than trace because we need to update the stream assignment in json. This for loop here just collects which nodes are actually in aside streams.
                         self.stream_assigned_in_trace[parent_event_tid][ssnode.name] = ssnode.stream_id
                         found = True
                         break
                     parent = parent.parent
                 if not found:
-                    logger.warning(f"Can't find the corresponding ssnode for event(ts {event.ts})")
+                    logger.warning(
+                        f"Can't find the corresponding ssnode for event(ts {event.ts})")
 
         self.check_one_graph(forward_tid, forward_graph)
-        
+
         print("forward phase finished.")
         self.check_one_graph(backward_tid, backward_graph)
         print("backward phase finished.")
@@ -620,7 +638,8 @@ if __name__ == "__main__":
                         help="the json file saved stream assignment")
     parser.add_argument('-o', "--output_csv_file", type=str,
                         default='analysis_result.csv', help="the name of the output csv file")
-    parser.add_argument('--export_graph', type=str, help="the json path to save the updated stream assignment")
+    parser.add_argument('--export_graph', type=str,
+                        help="the json path to save the updated stream assignment")
     parser.add_argument("--log_file", type=str, default='torchexpert.log',
                         help="the log file to save the idleness analysis results")
     args = parser.parse_args()

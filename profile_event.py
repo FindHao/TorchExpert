@@ -1,4 +1,5 @@
 from torch._C._profiler import _ProfilerEvent
+
 class ProfileEventSlim:
     """
     A simplified version of event class. 
@@ -16,6 +17,10 @@ class ProfileEventSlim:
                 self.duration_time_ns = event.duration_time_ns
                 self.start_time_ns = event.start_time_ns
                 self.end_time_ns = event.end_time_ns
+            elif type(event) is TraceEvent:
+                self.duration_time_ns = event.dur
+                self.start_time_ns = event.ts
+                self.end_time_ns = event.ts + event.dur
             else:
                 self.duration_time_ns = event.duration_us() * 1e3
                 self.start_time_ns = event.start_us() * 1e3

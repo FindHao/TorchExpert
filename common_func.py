@@ -41,6 +41,9 @@ def merge_interval(intervals:list[ProfileEventSlim]):
     # print_all_event_time(res)
     return res
 
+
+
+
 def get_latest_file(path):
     """
     Get the latest file in a directory.
