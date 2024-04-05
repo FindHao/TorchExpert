@@ -410,8 +410,8 @@ class TorchExpert:
         self.merged_slim_cuda_events = merge_interval(tmp_slim_cuda_events)
         non_overlapping_kernels = []
         for slimevent in self.merged_slim_cuda_events:
-        # since we merged all overlapped kernels to slimevents, the size of slimevent.include_events for non-overlapping kernels should be 1. We only care about the kernels in aside streams. 
-        # A buffer can generate two kernels while one kernel is overlapped but the other is not. We only care the pure non_overlapping buffers. This will be processed in next step.
+            # since we merged all overlapped kernels to slimevents, the size of slimevent.include_events for non-overlapping kernels should be 1. We only care about the kernels in aside streams.
+            # A buffer can generate two kernels while one kernel is overlapped but the other is not. We only care the pure non_overlapping buffers. This will be processed in next step.
             if len(slimevent.include_events) == 1 and slimevent.include_events[0].stream != DEFAULT_STREAM_ID:
                 non_overlapping_kernels.append(slimevent.include_events[0])
         for event in non_overlapping_kernels:
@@ -471,7 +471,7 @@ class TorchExpert:
             if not found:
                 logger.warning(
                     f"Can't find the corresponding ssnode for event(ts {event.ts}, {event.ts_offset})")
-        
+
         # {buf1: {slimevent1, slimevent2},}, this is used to filter the fake non overlapping buffers. e.g., a buffer can generate two kernels while one kernel is overlapped but the other is not. This buffer should be marked as overlapping.
         buffer_to_slimevents = {}
         for slimevent in self.merged_slim_cuda_events:
@@ -500,7 +500,7 @@ class TorchExpert:
                     break
             if skip:
                 continue
-                
+
             parent = event
             found = False
             while (not parent.name.startswith("CompiledFunction")):
@@ -667,6 +667,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-i", "--input", type=str, default='./',
                         help="The path of the profiling trace file or the path containing the profiling trace files. If you specify a path, torchexpert will search for the latest json file in that path.")
+    parser.add_argument('-a', '--analyze_mode', type=str, default='idle',
+                        help="the mode to analyze the trace file. The default mode is idle. The other mode is multi-stream.")
     parser.add_argument('--multistream', type=str,
                         help="the trace file enabled multi-stream")
     parser.add_argument('-m', "--model_name", type=str,
@@ -686,11 +688,14 @@ if __name__ == "__main__":
     # torchexpert.analyze(args.input)
     torchexpert.load_json(args.input)
     torchexpert.build_tree_from_json()
-    if args.stream_assignment is not None:
-        torchexpert.build_all_graphs(args.stream_assignment)
-        torchexpert.all_graphs.print_streams()
-    torchexpert.analyze_multi_stream()
-    torchexpert.update_stream_assignment(args.export_graph)
+    if args.analyze_mode == 'idle':
+        torchexpert.analyze(args.input)
+    elif args.analyze_mode == 'multi-stream':
+        if args.stream_assignment is not None:
+            torchexpert.build_all_graphs(args.stream_assignment)
+            torchexpert.all_graphs.print_streams()
+        torchexpert.analyze_multi_stream()
+        torchexpert.update_stream_assignment(args.export_graph)
 
     # else:
     #     # this mode is used to analyze the difference between the optimized trace and the original trace. So we need another torchexpert instance.
